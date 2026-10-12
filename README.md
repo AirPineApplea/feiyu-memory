@@ -1,4 +1,4 @@
-﻿# 肥鱼日记 · feiyu-memory
+# 肥鱼日记 · feiyu-memory
 
 > 让新开一个对话，用户依然感觉是**同一条鱼**。
 >
@@ -74,7 +74,7 @@ salience 每天按系数衰减，掉下去的条目不再进注入区，
 
 ```bash
 # 先完全退出 DeepSeek Harness Desktop，然后：
-dsh plugin --profile desktop add github:<你的用户名>/feiyu-memory
+dsh plugin --profile desktop add github:AirPineApplea/feiyu-memory
 ```
 
 装完重新打开 Harness。档案目录会自动创建在：

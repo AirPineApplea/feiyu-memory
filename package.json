@@ -4,6 +4,14 @@
   "description": "给 DeepSeek Harness 一条会记事的蓝色大肥鱼：跨会话的持久记忆 —— 人格内核、关系状态、情景日记。",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AirPineApplea/feiyu-memory.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AirPineApplea/feiyu-memory/issues"
+  },
+  "homepage": "https://github.com/AirPineApplea/feiyu-memory#readme",
   "exports": {
     ".": "./src/host/index.mjs",
     "./package.json": "./package.json",
