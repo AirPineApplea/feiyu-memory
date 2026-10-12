@@ -1,0 +1,216 @@
+/**
+ * 档案层单测：.dshpack 往返、坏数据降级、迁移、合并、人格锚点。
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  SCHEMA_VERSION,
+  createEmptyArchive,
+  archiveToFiles,
+  archiveFromFiles,
+  packArchive,
+  unpackArchive,
+  migrateArchive,
+  mergeArchives,
+  ensurePersonaStructure,
+  splitPersona,
+  normalizeDiaryEntry,
+  ANCHOR_BEGIN,
+  ANCHOR_END,
+  LEARNED_HEADING,
+} from '../src/core/archive.mjs';
+import { appendPersonaLearnings } from '../src/core/consolidate.mjs';
+
+const NOW = 1773000000000;
+
+function sampleArchive() {
+  const a = createEmptyArchive(NOW, '# 我是谁\n我是蓝色大肥鱼。');
+  a.diary.push(
+    normalizeDiaryEntry({
+      id: 'd1',
+      text: '我没问清语言就动手了。',
+      tags: ['代码'],
+      kind: 'failure',
+      salience: 0.8,
+      resolved: false,
+      created_at: NOW,
+    }),
+    normalizeDiaryEntry({
+      id: 'd2',
+      text: '他说他讨厌铺垫。',
+      tags: ['偏好'],
+      kind: 'chat',
+      salience: 0.6,
+      created_at: NOW + 1000,
+    }),
+  );
+  a.relationship.traits.push({
+    key: '答复',
+    value: '要结论先行',
+    confidence: 3,
+    salience: 0.8,
+    last_reinforced: NOW,
+  });
+  a.manifest.diary_count = 2;
+  return a;
+}
+
+test('archive: .dshpack 往返一致', () => {
+  const a = sampleArchive();
+  const bytes = packArchive(a);
+  const { archive: b, ok, warnings } = unpackArchive(bytes, { now: NOW });
+
+  assert.equal(ok, true);
+  assert.deepEqual(warnings, []);
+  assert.equal(b.manifest.schema_version, SCHEMA_VERSION);
+  assert.equal(b.diary.length, 2);
+  assert.equal(b.diary[0].id, 'd1');
+  assert.equal(b.diary[0].kind, 'failure');
+  assert.equal(b.diary[0].resolved, false);
+  assert.equal(b.diary[1].text, '他说他讨厌铺垫。');
+  assert.equal(b.relationship.traits[0].value, '要结论先行');
+  assert.ok(b.persona.includes('蓝色大肥鱼'));
+});
+
+test('archive: 日期跨月会拆成多个 jsonl 文件', () => {
+  const a = createEmptyArchive(NOW, 'x');
+  a.diary.push(
+    normalizeDiaryEntry({ id: 'a', text: '三月', created_at: Date.UTC(2026, 2, 5) }),
+    normalizeDiaryEntry({ id: 'b', text: '四月', created_at: Date.UTC(2026, 3, 5) }),
+  );
+  const files = archiveToFiles(a);
+  const months = files.map((f) => f.name).filter((n) => n.startsWith('diary/'));
+  assert.deepEqual(months.sort(), ['diary/2026-03.jsonl', 'diary/2026-04.jsonl']);
+});
+
+test('archive: 日记坏行只丢一行，其余照读', () => {
+  const files = [
+    { name: 'manifest.json', data: JSON.stringify({ schema_version: 1, created_at: NOW }) },
+    { name: 'persona.md', data: ensurePersonaStructure('# 我') },
+    { name: 'relationship.json', data: '{}' },
+    { name: 'lexicon.json', data: '{"items":[]}' },
+    {
+      name: 'diary/2026-03.jsonl',
+      data: [
+        JSON.stringify({ id: 'ok1', text: '好的第一条', created_at: NOW }),
+        '{ 这不是 JSON',
+        JSON.stringify({ id: 'ok2', text: '好的第二条', created_at: NOW + 1 }),
+        '{"id":123}', // id 不是字符串 → 丢
+      ].join('\n'),
+    },
+  ];
+  const entries = files.map((f) => ({ name: f.name, text: () => f.data }));
+  const { archive, warnings } = archiveFromFiles(entries, { now: NOW });
+
+  assert.equal(archive.diary.length, 2);
+  assert.deepEqual(archive.diary.map((d) => d.id), ['ok1', 'ok2']);
+  assert.ok(warnings.some((w) => w.includes('2 行读不出来')), warnings.join(' | '));
+});
+
+test('archive: manifest 坏掉时按空档案处理而不是抛错', () => {
+  const entries = [
+    { name: 'manifest.json', text: () => '{ 坏掉的 manifest' },
+    { name: 'persona.md', text: () => ensurePersonaStructure('# 我') },
+  ];
+  const { archive, warnings } = archiveFromFiles(entries, { now: NOW });
+  assert.equal(archive.diary.length, 0);
+  assert.ok(warnings.some((w) => w.includes('manifest')));
+});
+
+test('archive: 解不开的字节返回空档案 + ok=false，不抛', () => {
+  const r = unpackArchive(new Uint8Array([1, 2, 3, 4]), { now: NOW });
+  assert.equal(r.ok, false);
+  assert.equal(r.archive.diary.length, 0);
+  assert.ok(r.warnings[0].includes('解不开'));
+});
+
+test('archive: 缺少迁移函数时保留原档案并报警', () => {
+  const a = createEmptyArchive(NOW, 'x');
+  a.manifest.schema_version = -5; // 逼出一条不存在的迁移链
+  const { archive, warnings } = migrateArchive(a);
+  assert.equal(archive.manifest.schema_version, -5);
+  assert.ok(warnings.length > 0);
+});
+
+test('archive: 合并按 id 去重，base 优先', () => {
+  const base = sampleArchive();
+  const incoming = createEmptyArchive(NOW, 'x');
+  incoming.diary.push(
+    normalizeDiaryEntry({ id: 'd1', text: '重复的，应被忽略', created_at: NOW }),
+    normalizeDiaryEntry({ id: 'd3', text: '新的', created_at: NOW + 2 }),
+  );
+  incoming.relationship.traits.push({
+    key: '新偏好',
+    value: '喜欢短句',
+    confidence: 1,
+    salience: 0.5,
+    last_reinforced: NOW,
+  });
+
+  const merged = mergeArchives(base, incoming);
+  assert.deepEqual(
+    merged.diary.map((d) => d.id).slice().sort(),
+    ['d1', 'd2', 'd3'],
+    '三条都该在，且不重复',
+  );
+  // 合并后按时间排序；d1 的正文必须来自 base（base 优先）
+  assert.equal(merged.diary.find((d) => d.id === 'd1').text, '我没问清语言就动手了。');
+  assert.equal(merged.relationship.traits.length, 2);
+});
+
+test('persona: 结构保证锚点存在且幂等', () => {
+  const once = ensurePersonaStructure('# 我是谁\n我是鱼。');
+  const twice = ensurePersonaStructure(once);
+  assert.equal(once, twice, 'ensurePersonaStructure 必须幂等');
+  assert.ok(once.includes(ANCHOR_BEGIN));
+  assert.ok(once.includes(ANCHOR_END));
+  assert.ok(once.includes(LEARNED_HEADING));
+});
+
+test('persona: 锚点与已学部分能拆开', () => {
+  const text = ensurePersonaStructure('# 我是谁\n我是鱼。');
+  const { anchor, learned, structured } = splitPersona(text);
+  assert.equal(structured, true);
+  assert.ok(anchor.includes('我是鱼。'));
+  assert.equal(learned, '');
+});
+
+test('persona: 学到的东西追加在锚点之后，锚点一字不动', () => {
+  const original = ensurePersonaStructure('# 我是谁\n我是鱼。');
+  const r = appendPersonaLearnings(original, ['他讨厌铺垫', '- 被叫胖会不高兴'], {
+    now: NOW,
+    maxPerDay: 5,
+  });
+  assert.deepEqual(r.applied, ['- 他讨厌铺垫', '- 被叫胖会不高兴']);
+
+  const { anchor, learned } = splitPersona(r.persona);
+  assert.ok(anchor.includes('我是鱼。'), '锚点必须原样保留');
+  assert.ok(!anchor.includes('讨厌铺垫'), '新认知不能进锚点');
+  assert.ok(learned.includes('讨厌铺垫'));
+
+  // 锚点结束标记必须还在，且新内容在它之后
+  assert.ok(r.persona.indexOf(ANCHOR_END) < r.persona.indexOf('讨厌铺垫'));
+});
+
+test('persona: 每天改动条数受限，且不重复追加同一行', () => {
+  const original = ensurePersonaStructure('# 我');
+  const first = appendPersonaLearnings(original, ['- A', '- B', '- C'], {
+    now: NOW,
+    maxPerDay: 2,
+  });
+  assert.equal(first.applied.length, 2, '一天最多改 2 条');
+
+  const second = appendPersonaLearnings(first.persona, ['- C'], {
+    now: NOW,
+    maxPerDay: 2,
+    lastChange: first.lastChange,
+  });
+  assert.equal(second.applied.length, 0, '当天额度已用完');
+
+  const third = appendPersonaLearnings(first.persona, ['- A'], {
+    now: NOW,
+    maxPerDay: 5,
+  });
+  assert.equal(third.applied.length, 0, '同一行不该重复写进去');
+});

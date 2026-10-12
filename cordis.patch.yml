@@ -1,0 +1,49 @@
+# 肥鱼日记 —— 让新开一个对话，用户依然感觉是同一条鱼。
+#
+# ⚠️ 这个文件必须是**顶层 YAML 数组**，否则 loader 会直接抛错。
+#
+# `id` 同时也是设置项的命名空间（v0.2 的界面会用到），改它等于换一个插件身份。
+# `name` 必须等于 package.json 的 name。
+#
+# 所有选项都可以在这里的 `config:` 里写。留空即用默认值。
+# 注意：**patch 的 config 是整体替换、不深合并**，所以只写你想改的键是安全的
+# （只有你自己这一行会读它；但如果你在 profile 里覆写这一行，就要把想保留的键写全）。
+
+- insert:
+    - id: feiyu-memory
+      name: 'feiyu-memory'
+      config:
+        # 档案目录。留空 = ~/.dsh/feiyu-diary
+        # 想放到别处（比如同步盘）就写绝对路径。
+        dataDir: ''
+        # 总开关
+        enabled: true
+        # 把人格内核一起注入。装了 dsh-whale-persona 之类的人设插件就关掉它 ——
+        # 我们只负责"我们之间发生过什么"，人设交给它们。
+        includePersona: true
+        # 注入预算（token）。成本封顶，与用了多久无关。
+        budgetTokens: 700
+        # 固化用模型。留空 = 跟随你当前的默认模型。
+        # 强烈建议就用便宜档：这一步是结构化抽取，用贵的反而会自由发挥、把档案写花。
+        model: ''
+        # 思考档位。留空 = 跟随。建议留空或 low —— high 在这个场景是负收益。
+        reasoningEffort: ''
+        maxTokens: 900
+        # 第三方隐私泛化：人名/号码/地址这类"别人家的事"自动模糊掉，情绪保留。
+        thirdPartyRedaction: true
+        # 金额低于这个值就不动（"3 块钱的包子"要留着，那是生活）
+        amountThreshold: 100
+        # 日记重要度门槛，低于此值丢弃。调高 = 记性变挑，调低 = 话变多
+        minSalience: 0.3
+        # 相似度超过这个值就必定提起那件旧事
+        highSim: 0.5
+        # 每轮最多提起几条旧事（0 = 只提不主动，1 = 推荐）
+        maxShowPerTurn: 1
+        # 完全没匹配上时"走神"随机想起一条旧事的概率。这条纯粹为了像人。
+        wanderChance: 0.08
+        # 低峰时段（峰谷分时定价的谷时）。把 deferToOffPeak 打开后，
+        # 日记会攒到这段时间才写 —— 更便宜，而且本来就更像人（睡前整理）。
+        offPeakHours: '00:30-08:30'
+        deferToOffPeak: false
+        # 开发期调试日志。默认关，且**绝不落盘日记内容**。
+        debugLog: false

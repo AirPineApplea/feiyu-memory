@@ -1,0 +1,36 @@
+MIT License
+
+Copyright (c) 2026 feiyu-memory contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 关于第三方形象与文本
+
+本项目的**代码**采用上方的 MIT 许可证。
+
+本项目**不包含任何第三方美术素材**，也不包含社区流传的 `【PERSONA_LOAD】` 标签组。
+`persona.default.md` 为原创文本，仅在"蓝色大肥鱼 / 白饭 / 拒绝被叫胖"等**社区共识梗**上
+与网络二创内容有共通之处；梗本身不构成受著作权保护的表达。
+
+背景说明：网络流传的"鲸鱼娘"视觉形象，其原型角色"溟月"由 **上善无形** 创作，并以
+**CC BY-NC-SA 4.0** 开放二创（须署名、禁止商业使用、衍生作品须以相同方式共享）。
+本项目刻意不使用该视觉形象，因此不受该许可约束；但若你打算把本项目用于商业目的，
+请注意**不得引入鲸鱼娘相关美术素材**。

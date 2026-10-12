@@ -1,0 +1,38 @@
+# 侦察用的 DSH 内部源码解包（只读参考，体积大，绝不入库）
+.refs/
+
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物（本插件是纯 JS/ESM，无构建步骤；保留以防将来引入）
+dist/
+*.tsbuildinfo
+
+# 用户档案：这是用户的私人记忆，永远不进仓库
+*.dshpack
+*.dshpack.enc
+/diary/
+/index.sqlite
+
+# 人读版日记。它平时在 ~/.dsh/feiyu-diary/ 里；万一被拷进项目目录，
+# 也绝不该进仓库 —— 那是私事。
+日记.md
+
+# ── 本机随手记的笔记 / 临时验证产物：永不发布 ──
+# 这些是我自己用的，不是项目的一部分。
+开肥鱼日记插件.txt
+.verify-*
+*.verify-*
+验证*/
+
+# 开发期本地调试日志（默认关闭，且绝不落盘日记内容）
+*.debug.log
+.debug/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

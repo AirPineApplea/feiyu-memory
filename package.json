@@ -1,0 +1,45 @@
+{
+  "name": "feiyu-memory",
+  "version": "0.1.0",
+  "description": "给 DeepSeek Harness 一条会记事的蓝色大肥鱼：跨会话的持久记忆 —— 人格内核、关系状态、情景日记。",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/host/index.mjs",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "locale",
+    "README.md",
+    "LICENSE",
+    "SPEC.md"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4"
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.2"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node tools/check-patch-yaml.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "memory",
+    "persona",
+    "diary"
+  ]
+}
