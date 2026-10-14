@@ -392,7 +392,23 @@ export function apply(ctx, rawConfig) {
     let text = '';
     try {
       const query = s.lastUserText;
-      const { chosen } = selectMemories(archive.diary, index, query, s, s.turn, {
+
+      // ── 判断和事件，分开放 ──
+      //
+      // 这是这次改动的核心。**内容早就在了，只是放错了格子。**
+      //
+      // `feiyu_note` 写出来的东西（"别把前一种的辛苦当成功德"）是**判断**，
+      // 不是事件，却一直被当成事件渲染在「最近的事」里，格式跟流水账一模一样 ——
+      // 连我自己都分不出哪句是我写的。一位读者把这个毛病说得很准。
+      //
+      //   事件 → 「最近的事」/「突然想起来」（会被召回）
+      //   判断 → 「我自己想的」（永远在场，不进召回池）
+      //
+      // 判断**不参与召回**：它本来每轮都在，再被"想起来"一次是重复。
+      const notes = archive.diary.filter((e) => e?.kind === 'note');
+      const events = archive.diary.filter((e) => e?.kind !== 'note');
+
+      const { chosen } = selectMemories(events, index, query, s, s.turn, {
         highSim: config.highSim,
         maxShow: config.maxShowPerTurn,
         wanderChance: config.wanderChance,
@@ -405,8 +421,10 @@ export function apply(ctx, rawConfig) {
       // 「最近的事」—— 按时间取最近的几条，不走相似度。
       // 这是让注入区读起来像日记而不是像检索结果的关键：
       // 最近发生的事本来就在脑子里，不需要被"想起来"。
+      //
+      // 取的是 **events**，不是整个日记 —— 判断归「我自己想的」管。
       const recentCount = Number.isFinite(config.recentEntries) ? config.recentEntries : 8;
-      const recent = recentCount > 0 ? archive.diary.slice(-recentCount) : [];
+      const recent = recentCount > 0 ? events.slice(-recentCount) : [];
 
       // 手记是**只读**的，所以每轮都重新读一遍 —— 别的肥鱼或用户刚写进去的
       // 那行，下一轮就在注入里，不用重启。文件很小，而且整块渲染按轮缓存。
@@ -422,6 +440,8 @@ export function apply(ctx, rawConfig) {
         persona: archive.persona,
         relationship: { ...archive.relationship, since: archive.manifest.created_at },
         lexicon: archive.lexicon,
+        // 第三区：**我自己想的**（判断）。永远在场，不进召回池。
+        notes,
         recent,
         recalled: chosen,
         handNotes,

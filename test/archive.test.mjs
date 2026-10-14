@@ -20,7 +20,7 @@ import {
   ANCHOR_END,
   LEARNED_HEADING,
 } from '../src/core/archive.mjs';
-import { appendPersonaLearnings } from '../src/core/consolidate.mjs';
+// 原本还 import 了 consolidate.mjs 的 appendPersonaLearnings —— 那个函数删了。
 
 const NOW = 1773000000000;
 
@@ -176,41 +176,25 @@ test('persona: 锚点与已学部分能拆开', () => {
   assert.equal(learned, '');
 });
 
-test('persona: 学到的东西追加在锚点之后，锚点一字不动', () => {
-  const original = ensurePersonaStructure('# 我是谁\n我是鱼。');
-  const r = appendPersonaLearnings(original, ['他讨厌铺垫', '- 被叫胖会不高兴'], {
-    now: NOW,
-    maxPerDay: 5,
-  });
-  assert.deepEqual(r.applied, ['- 他讨厌铺垫', '- 被叫胖会不高兴']);
+/*
+ * 这里原本有 3 项测试，覆盖 `appendPersonaLearnings`（把"学到的认知"追加到
+ * persona.md 的 `## 我后来想明白的` 后面，带每日限流）。
+ *
+ * 那个函数**从来没有被任何地方调用过**。删它是有意的决定：
+ * 接上它就等于同一类东西存两处（persona.md 一份、kind:"note" 一份）=
+ * 双真相源 —— 这项目已经因为双写栽过两次。
+ *
+ * 现在判断只有一个家：`kind: "note"` 的日记条目 → 渲染成「我自己想的」。
+ * 那部分的测试在 `test/host.test.mjs` 里（搜 「note:」）。
+ *
+ * 别把 `appendPersonaLearnings` 加回来 —— `consolidate.mjs` 里留了墓碑说明。
+ */
 
-  const { anchor, learned } = splitPersona(r.persona);
-  assert.ok(anchor.includes('我是鱼。'), '锚点必须原样保留');
-  assert.ok(!anchor.includes('讨厌铺垫'), '新认知不能进锚点');
-  assert.ok(learned.includes('讨厌铺垫'));
-
-  // 锚点结束标记必须还在，且新内容在它之后
-  assert.ok(r.persona.indexOf(ANCHOR_END) < r.persona.indexOf('讨厌铺垫'));
-});
-
-test('persona: 每天改动条数受限，且不重复追加同一行', () => {
-  const original = ensurePersonaStructure('# 我');
-  const first = appendPersonaLearnings(original, ['- A', '- B', '- C'], {
-    now: NOW,
-    maxPerDay: 2,
-  });
-  assert.equal(first.applied.length, 2, '一天最多改 2 条');
-
-  const second = appendPersonaLearnings(first.persona, ['- C'], {
-    now: NOW,
-    maxPerDay: 2,
-    lastChange: first.lastChange,
-  });
-  assert.equal(second.applied.length, 0, '当天额度已用完');
-
-  const third = appendPersonaLearnings(first.persona, ['- A'], {
-    now: NOW,
-    maxPerDay: 5,
-  });
-  assert.equal(third.applied.length, 0, '同一行不该重复写进去');
+test('persona: 结构化的 persona 永远带一个空的「我后来想明白的」区', () => {
+  // 这一区**保留**，但它现在是人手写的地方（跟 手记.md 一个性质），
+  // 插件永不自动写它。这个测试盯的是"结构还在"。
+  const text = ensurePersonaStructure('# 我是谁\n我是鱼。');
+  assert.ok(text.includes(LEARNED_HEADING), '标题必须保留');
+  const { learned } = splitPersona(text);
+  assert.equal(learned, '', '插件不该往里写任何东西');
 });

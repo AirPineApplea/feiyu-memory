@@ -77,7 +77,11 @@ const { chosen } = selectMemories(archive.diary, index, query, { lastShownTurn: 
 });
 
 const recentCount = config.recentEntries;
-const recent = recentCount > 0 ? archive.diary.slice(-recentCount) : [];
+// 判断和事件分开放 —— 这条分流规则必须跟 host 里的一致，
+// 否则预览出来的不是线上会看到的东西，这个工具就白做了。
+const notes = archive.diary.filter((e) => e?.kind === 'note');
+const events = archive.diary.filter((e) => e?.kind !== 'note');
+const recent = recentCount > 0 ? events.slice(-recentCount) : [];
 
 // 手记 —— 也读进来，否则预览出来的东西跟线上注入不是一回事
 // （预览的全部价值就在于"跟真的一样"）
@@ -88,6 +92,7 @@ const rendered = renderMemoryBlock({
   persona: archive.persona,
   relationship: { ...archive.relationship, since: archive.manifest.created_at },
   lexicon: archive.lexicon,
+  notes,
   recent,
   recalled: chosen,
   handNotes,

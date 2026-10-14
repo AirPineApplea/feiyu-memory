@@ -895,17 +895,40 @@ test('note: 空正文会被拒，不会记进一条空壳', async () => {
   });
 });
 
-test('note: 记下的东西当场就能被召回（索引重建了）', async () => {
+test('note: 记下的东西当场就在注入里，而且进了「我自己想的」', async () => {
   await withHome(async (home) => {
     const h = makeHarness();
     apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    await callNote(h, { text: '他说过最烦我上来就动手，先问再写。' });
+    await callNote(h, { text: '别人给的数据跟出处对不上时，先问，别照抄。' });
 
     const agent = h.makeAgent('s_later');
     h.emit('agent/created', { agent });
-    h.emit('session/event', { id: 's_later' }, userEvent('我记得你答应过先问再写？', 1));
+    h.emit('session/event', { id: 's_later' }, userEvent('随便聊点什么', 1));
     const injected = agent.sections[0].text();
-    assert.match(injected, /先问|动手/, `主动记的条目应该能被想起来：${injected}`);
+
+    assert.match(injected, /我自己想的：/, `判断该有自己的格子：${injected}`);
+    assert.match(injected, /先问，别照抄/);
+    // **不能**混进「最近的事」—— 这是这次改动的全部意义
+    assert.ok(
+      !/最近的事：[\s\S]*先问，别照抄/.test(injected),
+      `判断串进事件区了：${injected}`,
+    );
+  });
+});
+
+test('note: 判断不进召回池 —— 它本来就每轮都在，再被"想起来"是重复', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    // 一条判断，用词故意跟下面那句话高度重合
+    await callNote(h, { text: '先问再写，别照抄。' });
+
+    const agent = h.makeAgent('s_r');
+    h.emit('agent/created', { agent });
+    h.emit('session/event', { id: 's_r' }, userEvent('我是不是说过先问再写？', 1));
+    const injected = agent.sections[0].text();
+
+    assert.ok(!injected.includes('突然想起来：'), `判断不该被召回：${injected}`);
   });
 });
 

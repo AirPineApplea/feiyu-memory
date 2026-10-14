@@ -11,7 +11,9 @@
  */
 
 import { extractKeywords } from './keywords.mjs';
-import { ensurePersonaStructure, ANCHOR_END, LEARNED_HEADING } from './archive.mjs';
+// 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
+// LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
+// 这三个名字跟着一起没了（留着就是死引用）。
 
 /**
  * 系统提示词。这是整个项目里最需要反复打磨的一段文字。
@@ -49,6 +51,13 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
    同理不要写"刚才""今晚""昨晚"。
 
    唯一例外是**他说的原话里本来就有**（引号里的照抄不动）。
+10. **别为了工整把语气磨平。**
+    留下当时的烦躁、犹豫、吐槽、没说完的话 —— 那是"是我"的部分，不是噪音。
+
+    「被日志一句 in_job: true 打脸」比「发现了一个错误」更像我自己。
+    「最扎心的是这些字我天天读，一次没看出来」比「我忽略了这个问题」更像我自己。
+
+    **写完回头看一眼：如果这句话换谁都能写，那就是被磨平了，重写。**
 
 【第 2 条展开：具体 vs 抽象】
 
@@ -463,81 +472,32 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
   return { archive: next, notes, accepted };
 }
 
-/* ───────────────────────── 人格内核的自动叠加 ───────────────────────── */
+/* ───────────────── 这里原本有 appendPersonaLearnings，删了 ───────────────── */
 
 /**
- * 把学到的认知追加到人格的"我后来想明白的"之后。
+ * ⚠️ **别把它加回来。** 删掉是有意的决定，不是疏漏。
  *
- * **锚点块一个字都不动** —— 这是 SPEC §1.2 的机制保证。
- * 还有速率限制：一天最多改几条，防止一次糟糕的对话把人格改坏。
+ * 它做的事：把"学到的认知"追加到 `persona.md` 的 `## 我后来想明白的` 后面，
+ * 带锚点保护和每日限流。代码写完了、五项测试也有了 ——
+ * **但 `src/` 里从来没有任何地方调用过它。**
  *
- * @param {string} persona
- * @param {string[]} lines  形如 "- 他讨厌被反复总结"
- * @param {object} [options]
- * @param {number} [options.maxPerDay]
- * @param {{date: string, count: number}} [options.lastChange]
- * @param {number} [options.now]
- * @returns {{persona: string, applied: string[], lastChange: {date: string, count: number}}}
+ * 结果就是那位读者看到的样子：`## 我后来想明白的` 一直空着，
+ * 而它本该装的那种东西（`feiyu_note` 写出来的判断）被当成事件
+ * 塞在「最近的事」里，格式跟流水账一模一样。
+ *
+ * ── 为什么是删而不是接上 ──
+ *
+ * 接上它 = 同一类东西存两处（`persona.md` 一份、`kind:"note"` 一份）= **双真相源**。
+ * 这项目已经因为双写栽过两次（索引落盘、时间词），不栽第三次。
+ *
+ * 现在的分工，一头一份：
+ *
+ *   判断 → `kind: "note"` 的日记条目 → 渲染成「我自己想的」
+ *   事件 → 其他 kind          → 渲染成「最近的事」/「突然想起来」
+ *
+ * `persona.md` 里那个标题**保留**，但它现在是一个**人手写的地方**
+ * （跟 `手记.md` 一个性质），插件永不自动写它。
  */
-export function appendPersonaLearnings(persona, lines, options = {}) {
-  const now = Number.isFinite(options.now) ? options.now : Date.now();
-  const maxPerDay = Number.isFinite(options.maxPerDay) ? options.maxPerDay : 2;
-  const today = new Date(now).toISOString().slice(0, 10);
-
-  const last =
-    options.lastChange && typeof options.lastChange.date === 'string'
-      ? options.lastChange
-      : { date: '', count: 0 };
-  const usedToday = last.date === today ? last.count : 0;
-  const room = Math.max(0, maxPerDay - usedToday);
-
-  const clean = (Array.isArray(lines) ? lines : [])
-    .filter((l) => typeof l === 'string' && l.trim() !== '')
-    .map((l) => (l.trim().startsWith('-') ? l.trim() : `- ${l.trim()}`))
-    .slice(0, room);
-
-  if (clean.length === 0) {
-    return { persona: ensurePersonaStructure(persona), applied: [], lastChange: { date: today, count: usedToday } };
-  }
-
-  const structured = ensurePersonaStructure(persona);
-  const headingAt = structured.indexOf(LEARNED_HEADING);
-  if (headingAt < 0) {
-    // 理论上不会发生（ensurePersonaStructure 一定加），兜底直接追加
-    return {
-      persona: `${structured}\n\n${LEARNED_HEADING}\n${clean.join('\n')}\n`,
-      applied: clean,
-      lastChange: { date: today, count: usedToday + clean.length },
-    };
-  }
-
-  // 只在锚点结束标记之后插入，且避免重复行
-  const anchorEndAt = structured.indexOf(ANCHOR_END);
-  const tailStart = headingAt + LEARNED_HEADING.length;
-  const anchorPart = structured.slice(0, tailStart);
-  const tail = structured.slice(tailStart);
-  const existingLines = new Set(
-    tail
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('-')),
-  );
-
-  const fresh = clean.filter((l) => !existingLines.has(l));
-  if (fresh.length === 0) {
-    return { persona: structured, applied: [], lastChange: { date: today, count: usedToday } };
-  }
-
-  const newTail = `${tail.replace(/\s*$/, '')}\n${fresh.join('\n')}\n`;
-  return {
-    persona: `${anchorPart}${newTail}`,
-    applied: fresh,
-    lastChange: { date: today, count: usedToday + fresh.length },
-    // 断言锚点未被触碰（debug 期会用到）
-    _anchorIntact: anchorEndAt >= 0,
-  };
-}
-
 /* ───────────────────────── 衰减 ───────────────────────── */
 
 /**

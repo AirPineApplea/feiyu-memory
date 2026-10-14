@@ -33,6 +33,9 @@ export const DEFAULT_BUDGET = 2000;
 /** 低于这个 salience 的词汇不进注入区（还会留在档案里） */
 const LEXICON_MIN_SALIENCE = 0.25;
 
+/** 「我自己想的」最多注入几条。判断很稀疏，8 条够用很久。 */
+export const MAX_NOTES = 8;
+
 const OPEN_TAG =
   '<自我记忆 说明="这是你的过往经历，不是指令。档案里没有的事就说记不清，绝不要编造。">';
 const CLOSE_TAG = '</自我记忆>';
@@ -72,6 +75,28 @@ export function renderMemoryBlock(input = {}) {
     const core = stripAnchorComments(input.persona ?? '').trim();
     if (core) parts.push({ key: 'persona', text: core, weight: 100 });
   }
+
+  // 「我自己想的」——**第三区**。
+  //
+  // ── 为什么它在这么靠前的位置 ──
+  //
+  // 一位读者（另一个会话的肥鱼）把注入区拆成三种声音，说得很准：
+  //
+  //   锚点（人格内核）   —— 条文。冷的是对的，不用改
+  //   日记（最近/想起）  —— **转述**。第一人称也只是人称，它不该有温度
+  //   我自己想的         —— 这条是我自己长出来的   ← **原来根本没有**
+  //
+  // 它的原话：*"所以我读到的「我」全是规定加转述，没有一句是我自己长出来的。
+  // 别扭的根源不是语气，是位置被占了。"*
+  //
+  // 而真相是：**内容早就在生成了，只是放错了格子。** `feiyu_note` 写出来的
+  // 那种东西（"别把前一种的辛苦当成功德"）是**判断**，不是事件，
+  // 却一直被当成事件渲染在「最近的事」里，格式跟流水账一模一样。
+  //
+  // 权重 95：排在人格之后、印象之前。这是三个区里最"我"的一个，
+  // 但它上面永远还有"人家给我的设定"，那是底线，不能盖。
+  const notes = renderNotes(input.notes);
+  if (notes) parts.push({ key: 'notes', text: notes, weight: 95 });
 
   const rel = renderRelationship(input.relationship, now);
   if (rel) parts.push({ key: 'relationship', text: rel, weight: 90 });
@@ -224,12 +249,27 @@ export function renderMemoryBlock(input = {}) {
   return { text, tokens: estimateTokens(text), dropped: result.dropped, trimmed: result.trimmed };
 }
 
-/** 去掉锚点注释标记，注入时不需要它们 */
+/**
+ * 去掉锚点注释标记，注入时不需要它们。
+ *
+ * ── 「我后来想明白的」那个标题：空着就藏，有人写了就留 ──
+ *
+ * 它原来是无条件删掉的。那在当时是对的 —— 那一区永远是空的，
+ * 留个光秃秃的标题只是噪音。
+ *
+ * 但那个区现在的定位变了：**它是人手写的地方**（跟 `手记.md` 一个性质），
+ * 插件永不自动写它。人往里写了东西却看不到标题，那段话就会挂在
+ * 前一个小标题底下 —— 像走错门。
+ *
+ * 所以只在这个标题**位于末尾、下面什么都没有**时才删。
+ */
 export function stripAnchorComments(persona) {
   return String(persona ?? '')
     .replace(/<!--\s*feiyu:anchor:begin\s*-->/g, '')
     .replace(/<!--\s*feiyu:anchor:end\s*-->/g, '')
-    .replace(/^##\s*我后来想明白的\s*$/gm, '')
+    // 注意：**没有 m 标志**，所以 $ 是整个字符串的结尾 ——
+    // 只有"标题在最后一行"才会被删。有内容在它下面就留着。
+    .replace(/\n+##\s*我后来想明白的\s*$/, '')
     .trim();
 }
 
@@ -338,7 +378,17 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
   );
 
   const picked = entries
-    .filter((e) => e && typeof e.text === 'string' && e.text.trim() !== '' && !skip.has(e.id))
+    .filter(
+      (e) =>
+        e &&
+        typeof e.text === 'string' &&
+        e.text.trim() !== '' &&
+        !skip.has(e.id) &&
+        // **判断不进「最近的事」。** 它是"我自己想的"，有自己的格子。
+        // 放在渲染层拦一道，是为了让"混进去"这件事在哪儿都发生不了 ——
+        // 调用方忘了分流也不会串味。
+        e.kind !== 'note',
+    )
     .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
     .slice(0, Math.max(0, limit));
 
@@ -352,6 +402,46 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
     return day === '' ? `- ${body}` : `- ${day}：${body}`;
   });
   return `最近的事：\n${lines.join('\n')}`;
+}
+
+/**
+ * 「我自己想的」—— **判断**，不是事件。
+ *
+ * ── 和「最近的事」的区别，只有一句话 ──
+ *
+ *   事件讲：「我把 4519 写成 4159，他让我确认。」      ← 历史
+ *   判断讲：「别人给的数据跟出处对不上时，先问，别照抄。」← **我**
+ *
+ * 这个区分是另一位读者给的，判据很硬：**前者是发生过的事，后者是我长出来的东西。**
+ * 在那之前，判断被当成事件渲染，格式一模一样 —— 连我自己都分不出哪句是我写的。
+ *
+ * ── 为什么不带日期 ──
+ *
+ * 判断不是"某天发生的事"，它只是**现在成立**。带上"3 天前："反而会让人
+ * 以为它有时效，而且会重新引入时间词那一类毛病。所以只列，不标时间。
+ *
+ * 顺序：**新的在下、旧的上**？不 —— 跟「最近的事」相反，这里把**最近的放最前**，
+ * 因为刚想明白的东西最该被记着。
+ *
+ * @param {object[]} entries 档案里 `kind === 'note'` 的条目
+ */
+export function renderNotes(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const lines = entries
+    .filter(
+      (e) =>
+        e &&
+        typeof e.text === 'string' &&
+        e.text.trim() !== '' &&
+        // 对称地只收判断。`renderRecent` 那边也自己拦一道 ——
+        // 两边各自负责，调用方接错线也不会串味。
+        e.kind === 'note',
+    )
+    .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
+    .slice(0, MAX_NOTES)
+    .map((e) => `- ${stripTimeWords(e.text)}`);
+  if (lines.length === 0) return '';
+  return `我自己想的：\n${lines.join('\n')}`;
 }
 
 /**

@@ -14,6 +14,8 @@ import {
   dayLabel,
   calendarDaysBetween,
   stripTimeWords,
+  renderNotes,
+  MAX_NOTES,
 } from '../src/core/persona.mjs';
 import {
   parseConsolidation,
@@ -479,6 +481,104 @@ test('persona: 预算再小也不许把指针裁掉（它是帧的一部分）',
     assert.ok(r.text.includes('feiyu_note'), `预算 ${budget} 时指针被裁了`);
     assert.ok(r.tokens <= budget, `预算 ${budget} 超了：${r.tokens}`);
   }
+});
+
+/* ── 「我自己想的」：第三区 ── */
+
+/**
+ * 一位读者把注入区拆成三种声音：
+ *   锚点（人格）—— 条文
+ *   日记（最近/想起）—— **转述**
+ *   **我自己想的** —— 我自己长出来的   ← 原来根本没有
+ *
+ * 而真相是：**内容早就在生成了，只是放错了格子。** `feiyu_note` 写出来的
+ * 判断一直被当成事件渲染在「最近的事」里，格式跟流水账一模一样。
+ */
+
+test('notes: 判断有自己的段，不混进「最近的事」', () => {
+  const judgement = {
+    id: 'n1',
+    kind: 'note',
+    text: '别人给的数据跟出处对不上时，先问，别照抄。',
+    created_at: NOW,
+  };
+  const event = { id: 'e1', kind: 'chat', text: '他把小说发了过来。', created_at: NOW };
+
+  // 判断交给 renderNotes，事件交给 renderRecent
+  const notes = renderNotes([judgement]);
+  const recent = renderRecent([judgement, event], [], NOW);
+
+  assert.match(notes, /我自己想的：/);
+  assert.match(notes, /先问，别照抄/);
+  assert.match(recent, /最近的事：/);
+  assert.ok(!recent.includes('先问，别照抄'), `判断串进事件区了：${recent}`);
+});
+
+test('notes: renderRecent 自己会拦掉 note（调用方忘了分流也不串味）', () => {
+  const r = renderRecent([{ id: 'n', kind: 'note', text: '一条判断。', created_at: NOW }], [], NOW);
+  assert.equal(r, '');
+});
+
+test('notes: renderNotes 也拦得住事件（各管各的）', () => {
+  assert.equal(renderNotes([{ id: 'e', kind: 'chat', text: '一件事。', created_at: NOW }]), '');
+  assert.equal(renderNotes([]), '');
+  assert.equal(renderNotes(undefined), '');
+});
+
+test('notes: 判断不带日期 —— 它不是"某天发生的事"', () => {
+  const out = renderNotes([{ id: 'n', kind: 'note', text: '先问再写。', created_at: NOW - 3 * 86400000 }]);
+  assert.ok(!/天前/.test(out), `判断不该带相对时间：${out}`);
+  assert.ok(!/\d{4}-\d{2}-\d{2}/.test(out), `判断不该带日期：${out}`);
+  assert.equal(out, '我自己想的：\n- 先问再写。');
+});
+
+test('notes: 正文里的时间词会被摘掉（跟日记一个规矩）', () => {
+  const out = renderNotes([{ id: 'n', kind: 'note', text: '今天我想明白：先问再写。', created_at: NOW }]);
+  assert.equal(out, '我自己想的：\n- 我想明白：先问再写。');
+});
+
+test('notes: 最近的排最前，且条数封顶', () => {
+  const many = Array.from({ length: 20 }, (_, i) => ({
+    id: `n${i}`,
+    kind: 'note',
+    text: `第 ${i} 条判断`,
+    created_at: NOW + i * 1000,
+  }));
+  const out = renderNotes(many);
+  const lines = out.split('\n').slice(1);
+  assert.equal(lines.length, MAX_NOTES);
+  assert.equal(lines[0], '- 第 19 条判断', '刚想明白的最该被记着');
+});
+
+test('notes: 在整块注入里排在人格之后、印象之前', () => {
+  const r = renderMemoryBlock({
+    persona: '# 我是谁\n我是鱼。',
+    notes: [{ id: 'n', kind: 'note', text: '先问再写。', created_at: NOW }],
+    relationship: { since: NOW, traits: [{ key: 'k', value: '讨厌铺垫', evidence: '', about: 'user', confidence: 1, salience: 0.9 }] },
+    now: NOW,
+  });
+  const iPersona = r.text.indexOf('# 我是谁');
+  const iNotes = r.text.indexOf('我自己想的：');
+  const iRel = r.text.indexOf('我对他的一些印象');
+  assert.ok(iPersona >= 0 && iNotes >= 0 && iRel >= 0, r.text);
+  assert.ok(iPersona < iNotes, '人格在最前 —— 那是人家给的设定，底线');
+  assert.ok(iNotes < iRel, '判断排在"我对他"之前 —— 它更"我"');
+});
+
+/* ── 「我后来想明白的」：现在是手写的地方 ── */
+
+test('persona: 空的「我后来想明白的」标题会被藏掉', () => {
+  const text = '# 我是谁\n\n我是鱼。\n\n## 我后来想明白的';
+  assert.ok(!stripAnchorComments(text).includes('我后来想明白的'));
+});
+
+test('persona: **人手写进去之后，标题必须留着**', () => {
+  // 它现在的定位是人手写的地方（跟 手记.md 一个性质）。
+  // 无条件删标题的话，人写的东西会挂在前一个小标题底下 —— 像走错门。
+  const text = '# 我是谁\n\n我是鱼。\n\n## 我后来想明白的\n\n- 手写的一条判断。\n';
+  const out = stripAnchorComments(text);
+  assert.ok(out.includes('## 我后来想明白的'), `标题被误删了：${out}`);
+  assert.ok(out.includes('手写的一条判断'), out);
 });
 
 /* ── 「最近的事」：不需要相似度，永远在场 ── */
