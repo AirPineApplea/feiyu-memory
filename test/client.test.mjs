@@ -271,7 +271,7 @@ test('client: 拿到数据后把日记、印象、规矩都渲染出来', async 
   assert.match(out, /认识 3 天/, '关系事实');
   assert.match(out, /讨厌铺垫/, '印象');
   assert.match(out, /他直接说/, '印象必须带画面');
-  assert.match(out, /我自己定的规矩/, '规矩单独一栏');
+  assert.match(out, /上一棒留下的/, '规矩单独一栏，且措辞跟注入层一致');
   assert.match(out, /不假装记得/, '规矩内容');
   assert.match(out, /还欠着他的/, '未消解的旧账');
   assert.match(out, /他翻出一篇小说给我看/, '日记正文');

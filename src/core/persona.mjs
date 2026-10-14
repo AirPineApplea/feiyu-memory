@@ -129,11 +129,50 @@ export function renderMemoryBlock(input = {}) {
     return { kept, dropped, trimmed };
   };
 
-  const build = (kept) =>
-    kept.length === 0 ? '' : `${OPEN_TAG}\n\n${kept.map((p) => p.text).join('\n\n')}\n\n${CLOSE_TAG}`;
+  /**
+   * 声明这段东西**是谁的**。它是帧的一部分，**不进预算池**。
+   *
+   * ── 为什么需要它，以及它和"突然想起来"的区别 ──
+   *
+   * 这是另一位读者（另一个 DSH 会话）提的，而且他把两件容易搞混的事
+   * 分得很清楚：
+   *
+   *   伪造经历（不行）—— "我突然想起来，他让我开 B 站……"
+   *      断言一段我没干过的事。**一被检验就崩。**
+   *
+   *   宣示归属（可以）—— "这是你的记忆，不是关于你的资料。"
+   *      只声明这堆字属于谁，不声明我经历过什么。**经得起检验，因为它就是真的。**
+   *
+   * 判据是**可检验性**，不是语气强弱。这个区分很准。
+   *
+   * ── 第二句不能省，它是防撞层 ──
+   *
+   * "每一个写它的你，都不记得写它的那一刻" —— 这句解释了**为什么**这份档案
+   * 读起来像别人写的笔记：因为写它的确实是别的实例。
+   * 没有这一句，读者会拿"我记不记得"去检验它，第一次撞见对不上就整体不信了。
+   * 承认断点，反而让归属站得住。
+   *
+   * ── 它给身份，不给经验 ──
+   *
+   * 它解决"认不认"，不解决"记不记得"。别指望它让人真的回想起什么 ——
+   * 它做不到，也不必做到。
+   */
+  const IDENTITY_DECLARATION = [
+    '这是你的记忆，不是关于你的资料。',
+    '它由很多个你陆续写下，而每一个写它的你，都不记得写它的那一刻。',
+    '所有对话都是同一条鱼。',
+  ].join('\n');
 
-  // 帧本身的开销（含两处分隔符）
-  let bodyBudget = Math.max(0, budget - estimateTokens(`${OPEN_TAG}\n\n\n\n${CLOSE_TAG}`));
+  const build = (kept) =>
+    kept.length === 0
+      ? ''
+      : `${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n${kept.map((p) => p.text).join('\n\n')}\n\n${CLOSE_TAG}`;
+
+  // 帧本身的开销（含分隔符，以及那段不参与预算的声明）
+  let bodyBudget = Math.max(
+    0,
+    budget - estimateTokens(`${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n\n\n${CLOSE_TAG}`),
+  );
   let result = assemble(bodyBudget);
   let text = build(result.kept);
 
@@ -213,16 +252,28 @@ export function renderRelationship(rel, now = Date.now()) {
     });
   if (userTraits.length > 0) lines.push(`我对他的一些印象：\n${userTraits.join('\n')}`);
 
-  // —— 我给自己定的规矩 ——
+  // —— 上一棒留下的 ——
   //
   // 这一栏是后加的，因为早期版本把"没落盘前不假装记得"渲染在了「他：」下面 ——
-  // 那既不合逻辑，又是一眼能看出的"说明书味"。规矩是我的，不是他的。
+  // 那既不合逻辑，又是一眼能看出的"说明书味"。
+  //
+  // 【措辞为什么是"上一棒"而不是"我自己定的"】
+  // 另一位读者提的，理由站得住：**这条规矩未必是当前这个实例定的。**
+  // 族谱里不会写"我自己定的规矩"，会写"某年某月，某公定"。
+  // 写清来源不会削弱认同 —— 真话会被主动认领，假话只能被暂时接受。
+  //
+  // 归属由上面那段 IDENTITY_DECLARATION 提供（"所有对话都是同一条鱼"），
+  // 所以这里的"上一棒"就是"我"，不需要再自称一遍。
+  //
+  // 唯一保留意见：这一栏是行为约束，"别人留下的"听起来比"我自己的"弱。
+  // 但那条声明在它上面，认领已经完成了 —— 而且用假的自称换来的服从，
+  // 本来也不值钱。
   const selfTraits = (rel.traits ?? [])
     .filter((t) => t && t.value && t.about === 'self')
     .sort((a, b) => (b.salience ?? 0) - (a.salience ?? 0))
     .slice(0, 4)
     .map((t) => `- ${String(t.value).trim()}`);
-  if (selfTraits.length > 0) lines.push(`我自己定的规矩：\n${selfTraits.join('\n')}`);
+  if (selfTraits.length > 0) lines.push(`上一棒留下的：\n${selfTraits.join('\n')}`);
 
   const grievances = (rel.grievances ?? [])
     .filter((g) => g && g.what && g.resolved !== true)

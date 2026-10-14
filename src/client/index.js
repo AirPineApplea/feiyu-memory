@@ -367,11 +367,13 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-          // ── 我给自己定的规矩 ──
+          // ── 上一棒留下的 ──
+          // 措辞必须跟注入层（persona.mjs）一致 —— 同一个东西两个说法，
+          // 就是我们刚修过的那类毛病换了个出口。
           self.length > 0
             ? h(
                 Section,
-                { title: '我自己定的规矩' },
+                { title: '上一棒留下的' },
                 self.map((t, i) =>
                   h(
                     'div',

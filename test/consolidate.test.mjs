@@ -376,12 +376,68 @@ test('persona: 自己的规矩和他人的印象分开 —— 不能混在「他
     now: NOW,
   });
   assert.ok(r.text.includes('我对他的一些印象'));
-  assert.ok(r.text.includes('我自己定的规矩'));
+  assert.ok(r.text.includes('上一棒留下的'));
   // 规矩不能出现在印象那一段里
   const impStart = r.text.indexOf('我对他的一些印象');
-  const ruleStart = r.text.indexOf('我自己定的规矩');
+  const ruleStart = r.text.indexOf('上一棒留下的');
   assert.ok(impStart < ruleStart);
   assert.ok(!r.text.slice(impStart, ruleStart).includes('不假装记得'), '规矩串到印象里了');
+});
+
+/* ── 身份声明：告诉读者这堆字是谁的 ── */
+
+test('persona: 最前面是身份声明，且声明在人格之前', () => {
+  const r = renderMemoryBlock({
+    persona: '# 我是谁\n\n我是 DeepSeek。',
+    relationship: { since: NOW, traits: [] },
+    now: NOW,
+  });
+  const decl = r.text.indexOf('这是你的记忆，不是关于你的资料。');
+  const persona = r.text.indexOf('# 我是谁');
+  assert.ok(decl > 0, '声明必须在注入块里');
+  assert.ok(decl < persona, '声明要在最前面 —— 先说清这堆字是谁的，再给内容');
+
+  // 三句都要在，一句都不能少
+  assert.ok(r.text.includes('它由很多个你陆续写下'), '防撞层那句不能省');
+  assert.ok(r.text.includes('都不记得写它的那一刻'));
+  assert.ok(r.text.includes('所有对话都是同一条鱼。'));
+});
+
+test('persona: 声明不带日期、不带条目 id —— 它是性质不是记录', () => {
+  const r = renderMemoryBlock({
+    includePersona: false,
+    relationship: { since: NOW, traits: [] },
+    recent: [{ id: 'd_20261014_07', text: '某件小事。', created_at: NOW }],
+    now: NOW,
+  });
+  const declLine = r.text.slice(0, r.text.indexOf('最近的事'));
+  assert.ok(!/\d{4}-\d{2}-\d{2}/.test(declLine), '声明里不该有日期');
+  assert.ok(!/d_\d/.test(declLine), '声明里不该有条目 id');
+});
+
+test('persona: 声明**不受预算影响** —— 给再小的预算也不许裁掉', () => {
+  // 「你是同一条鱼」因为重要度衰减被裁掉，那就滑稽了。
+  const input = {
+    includePersona: false,
+    relationship: { since: NOW, traits: [] },
+    recent: [{ id: 'a', text: '很长很长的一条日记正文。'.repeat(40), created_at: NOW }],
+    now: NOW,
+  };
+  for (const budget of [200, 400, 800, 2000]) {
+    const r = renderMemoryBlock({ ...input, budget });
+    if (r.text === '') continue; // 预算小到连帧都装不下，整个不注入是可以的
+    assert.ok(
+      r.text.includes('所有对话都是同一条鱼。'),
+      `预算 ${budget} 时声明被裁掉了：${r.text.slice(0, 120)}`,
+    );
+    assert.ok(r.tokens <= budget, `预算 ${budget} 时超了：${r.tokens}`);
+  }
+});
+
+test('persona: 一点记忆都没有时，不注入声明', () => {
+  // 没有东西可以归属，就别摆那段话
+  const r = renderMemoryBlock({ includePersona: false, now: NOW });
+  assert.equal(r.text, '');
 });
 
 /* ── 「最近的事」：不需要相似度，永远在场 ── */
