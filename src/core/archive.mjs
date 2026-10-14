@@ -284,6 +284,10 @@ function sanitizeRelationship(raw) {
         .map((t) => ({
           key: t.key,
           value: t.value,
+          // 产生这个印象的那个具体瞬间。没有它，注入区就读起来像"用户说明书"。
+          evidence: typeof t.evidence === 'string' ? t.evidence : '',
+          // 'user' = 我对他的印象；'self' = 我给自己定的规矩。两者不能混。
+          about: t.about === 'self' ? 'self' : 'user',
           confidence: Number(t.confidence) || 1,
           salience: clamp01(t.salience, 0.5),
           last_reinforced: Number(t.last_reinforced) || Date.now(),

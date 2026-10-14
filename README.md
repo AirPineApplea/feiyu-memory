@@ -177,8 +177,8 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 - id: feiyu-memory
   name: 'feiyu-memory'
   config:
-    budgetTokens: 700
-    minSalience: 0.3
+    budgetTokens: 2000
+    minSalience: 0.15
     deferToOffPeak: true
     offPeakHours: '00:30-08:30'
 ```
@@ -188,15 +188,27 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 | `dataDir` | `''` | 档案目录，留空 = `~/.dsh/feiyu-diary`。想放同步盘就写绝对路径 |
 | `enabled` | `true` | 总开关 |
 | `includePersona` | `true` | 是否把人格内核一起注入。**装了别的人设插件就关掉它** |
-| `budgetTokens` | `700` | 注入预算封顶 |
+| `budgetTokens` | `2000` | 注入预算封顶 |
 | `model` | `''` | 固化用模型，留空 = 跟随当前默认模型 |
-| `reasoningEffort` | `''` | 留空或 `low`。**`high` 在这个场景是负收益** |
+| `reasoningEffort` | `off` | **固化的思考档位。保持 `off`** —— 它故意不跟随你聊天时选的档位，见下方说明 |
 | `maxTokens` | `900` | 固化最大输出 |
 | `thirdPartyRedaction` | `true` | 第三方隐私泛化 |
 | `amountThreshold` | `100` | 低于此值的金额不动（"3 块钱的包子"要留着） |
-| `minSalience` | `0.3` | 日记重要度门槛，调高 = 记性变挑 |
+| `minSalience` | `0.15` | 日记重要度门槛。**调高 = 记性变挑，但寒暄和试错也会被扔掉** |
 | `highSim` | `0.5` | 相似度超过就必定提起那件旧事 |
-| `maxShowPerTurn` | `1` | 每轮最多提起几条旧事（`0` = 只提不主动） |
+| `recentEntries` | `8` | 「最近的事」最多列几条。**不走相似度，永远在场** |
+| `maxShowPerTurn` | `4` | 「突然想起来」最多几条（`0` = 不主动提旧事） |
+
+> **`reasoningEffort` 为什么默认 `off`，而不是跟随你的聊天设置**
+>
+> 固化是**结构化抽取**，不是创作。它曾经写的是"留空 = 跟随当前默认模型"，
+> 结果你聊天时选了 `high`，后台每次写日记也在疯狂思考 ——
+> 900 个输出 token 全烧在推理上，正文一个字都没产出。
+>
+> 症状极其难查：日志显示"已收 600 个 chunk / **0 字符**"，
+> 请求正常、chunk 正常、进程正常退出、**没有一条报错**，就是不记事。
+>
+> 所以后台任务和前台对话的配置**必须解耦**。想要它思考就手动填 `low`，但一般没必要。
 | `wanderChance` | `0.08` | 走神随机想起一条旧事的概率 |
 | `offPeakHours` | `'00:30-08:30'` | 低峰时段 |
 | `deferToOffPeak` | `false` | 把日记攒到低峰时段才写 |

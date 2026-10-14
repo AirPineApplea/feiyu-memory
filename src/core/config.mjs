@@ -48,9 +48,9 @@ export const CONFIG_SPEC = [
   {
     key: 'budgetTokens',
     type: 'number',
-    default: 700,
+    default: 2000,
     min: 200,
-    max: 2000,
+    max: 4000,
     step: 1,
     label: '注入预算（token）',
   },
@@ -63,8 +63,8 @@ export const CONFIG_SPEC = [
   {
     key: 'reasoningEffort',
     type: 'string',
-    default: '',
-    label: '思考档位（留空 = 跟随；建议 low）',
+    default: 'off',
+    label: '固化的思考档位（off/low/high/max；保持 off）',
   },
   {
     key: 'maxTokens',
@@ -92,7 +92,7 @@ export const CONFIG_SPEC = [
   {
     key: 'minSalience',
     type: 'number',
-    default: 0.3,
+    default: 0.15,
     min: 0,
     max: 1,
     step: 0.05,
@@ -108,13 +108,22 @@ export const CONFIG_SPEC = [
     label: '必触发的相似度阈值',
   },
   {
+    key: 'recentEntries',
+    type: 'number',
+    default: 8,
+    min: 0,
+    max: 30,
+    step: 1,
+    label: '「最近的事」最多列几条（不靠相似度，永远在场）',
+  },
+  {
     key: 'maxShowPerTurn',
     type: 'number',
-    default: 1,
+    default: 4,
     min: 0,
-    max: 3,
+    max: 12,
     step: 1,
-    label: '每轮最多提起几条旧事',
+    label: '「突然想起来」最多几条（按相似度召回）',
   },
   {
     key: 'wanderChance',

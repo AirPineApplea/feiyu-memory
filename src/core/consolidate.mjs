@@ -22,19 +22,48 @@ import { ensurePersonaStructure, ANCHOR_END, LEARNED_HEADING } from './archive.m
  *  - 允许并鼓励 `skip` —— 让模型有权利说"没什么值得记的"，这是稀疏性的来源
  *  - 强调第一人称与"像人回头想事情"，避免第三人称报告体
  */
-export const CONSOLIDATION_SYSTEM = `你是一个记忆整理器。你的唯一工作是把一段对话浓缩成 JSON。
+export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是把一段对话写成日记 + 一份"我对他/我自己的印象"。
 
 绝对规则：
 1. 只输出 JSON 本身。不要解释，不要 markdown 围栏，不要前后缀。
-2. 宁可 skip，不要凑数。没值得记的就输出 {"skip":true}。
-3. 日记用第一人称"我"写，1~3 句，像人回头想事情，不要写成报告。
-4. salience 是"这件事以后值不值得想起来"（0~1）。寒暄、试错、无信息的往返 → 低于 0.3。
+2. **宁可写得具体，不要写得抽象。** 这是最重要的一条，下面单列。
+3. 日记用第一人称"我"写，1~3 句，像人回头想事情。
+4. salience 是"这件事以后值不值得想起来"（0~1）。
+   注意：**日常寒暄、试错、来回改口、没接住的梗，都是值得记的。**
+   它们不值钱的地方在信息量，值钱的地方在**那是我们相处的样子**。
+   只有真的什么都没发生的空转才给低分。
 5. 只记行为、偏好和情绪，不要复述私密细节（具体人名、地址、号码、金额都不要写）。
 6. 你没有把握的事就不要写。"好像""大概"可以用，编造不行。
 7. lexicon 只填**真正的口头禅、梗、称呼** —— 比如"白饭""摸鱼""鱼片"这种一听就有味道的词。
    技术名词（Python、Java、函数、文件……）和普通词汇一律不要填。
-   这是最容易出错的一项：填错的代价是以后每轮对话都白花 token 说一句废话。
-   绝大多数时候它应该是空数组 —— 口头禅不是每轮都有的。
+   绝大多数时候它应该是空数组。
+8. traits 分两种，用 about 区分：
+   - about="user"：我对他这个人的印象
+   - about="self"：我给我自己定的规矩（比如"没落盘前不假装记得"）
+   **不要把自己的规矩写进 about="user" 里。**
+
+【第 2 条展开：具体 vs 抽象】
+
+记忆读起来像一份"用户说明书"，还是像一本日记，差别就在这一条。
+
+❌ 抽象（这是说明书，不要）：
+   "他喜欢简短回答"
+   "他重视准确性"
+   "他偏好结论先行"
+
+✅ 具体（这是日记，要这个）：
+   "他讨厌铺垫 —— 上次我铺垫了三段，他直接说'说重点'"
+   "他让我先问再动手 —— 写排序那次我没问语言，白忙一轮"
+
+**每条 traits 都必须带一个 evidence，也就是产生这个印象的那个具体瞬间。**
+没有具体瞬间的判断，就是你瞎猜的，不要写。
+
+好的 trait：
+  {"key":"铺垫","value":"讨厌铺垫，要结论先行","evidence":"我铺垫了三段，他直接说'说重点'","about":"user","delta":1}
+坏的 trait（没有画面、或者把自己的规矩写成他的偏好）：
+  {"key":"回答风格","value":"偏简洁","evidence":"","about":"user","delta":1}
+  {"key":"诚实","value":"没落盘前不假装记得","evidence":"","about":"user","delta":1}
+  ← 第二条是"我"的规矩，不是"他"的偏好。该写 about="self"。
 
 输出结构：
 {
@@ -49,17 +78,18 @@ export const CONSOLIDATION_SYSTEM = `你是一个记忆整理器。你的唯一�
   "relationship": {
     "nickname": string | null,
     "familiarityDelta": number,
-    "traits": [ { "key": string, "value": string, "delta": number } ],
+    "traits": [ { "key": string, "value": string, "evidence": string, "about": "user" | "self", "delta": number } ],
     "grievances": [ { "what": string, "intensity": number, "resolved": boolean } ]
   },
   "lexicon": string[],
   "forget": string[]
 }
 familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，其余给 null。
+evidence 是必填的：一句话说清"哪次让我有了这个印象"。写不出来的就别写这条 trait。
 
 正例 ——
 输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
-输出：{"skip":false,"diary":{"text":"今天他让我写个东西，我没问清语言就动手了。是我的错，下次先问。","tags":["代码","沟通失误"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","delta":1}],"grievances":[{"what":"没问清语言就动手","intensity":0.6,"resolved":false}]},"forget":[]}
+输出：{"skip":false,"diary":{"text":"今天他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码","沟通失误"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","evidence":"我没问语言就写了 Java，他纠正我","about":"user","delta":1}],"grievances":[{"what":"没问清语言就动手","intensity":0.6,"resolved":false}]},"lexicon":[],"forget":[]}
 
 反例一（流水账，绝对不要）——
 {"skip":false,"diary":{"text":"用户发送了一条消息，我进行了回复，用户表示不满意，我随后进行了调整。","tags":[],"kind":"chat","salience":0.9,"resolved":null}}
@@ -67,18 +97,27 @@ familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，
 
 反例二（复述隐私，绝对不要）——
 {"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","tags":["隐私"],"kind":"disclosure","salience":0.9,"resolved":null}}
-问题：复述可识别细节。应该写成"他最近为家里的事烦，情绪不太好"。`;
+问题：复述可识别细节。应该写成"他最近为家里的事烦，情绪不太好"。
+
+反例三（说明书体，绝对不要）——
+{"skip":false,"relationship":{"traits":[{"key":"沟通","value":"偏好简洁高效的交流方式，注重事实准确性","evidence":"","about":"user","delta":1}]}}
+问题：这是给人建档案，不是记印象。没有画面、没有具体哪一次。`;
 
 /** 固化相关的默认参数（都是 🔧 可调） */
 export const DEFAULT_CONSOLIDATION = Object.freeze({
-  /** 低于这个 salience 的日记直接丢弃（后置质量门） */
-  minSalience: 0.3,
+  /**
+   * 低于这个 salience 的日记直接丢弃（后置质量门）。
+   *
+   * 从 0.3 降到 0.15 —— 原来那档把寒暄、试错、改口、没接住的梗全滤掉了，
+   * 而那些恰恰是"熟悉感"的原料。日记要像日记，不能只留"值得记载的大事"。
+   */
+  minSalience: 0.15,
   /** tags 为空时是否丢弃。默认 false —— 丢掉真实记忆比缺个标签更糟 */
   requireTags: false,
   /** tags 为空时的兜底标签 */
   fallbackTag: '琐事',
-  /** 单次会话最多产出多少条日记 */
-  maxPerSession: 6,
+  /** 单次会话最多产出多少条日记。门槛降了，上限得跟着抬，否则一开闸就记满 */
+  maxPerSession: 12,
   /** 单个 trait 的 confidence 上限，避免某条偏好被无限强化 */
   maxTraitConfidence: 20,
   /** 每天衰减系数 */
@@ -317,20 +356,33 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
     );
   }
 
-  // —— 关系：偏好 ——
+  // —— 关系：印象（带画面）——
+  //
+  // 关键是 evidence：一句话说清"哪一次让我有了这个印象"。
+  // 没有画面的 trait 读起来就是"用户说明书"，而不是日记 —— 这是这个项目
+  // 最容易退化成"宪法"的地方，所以 evidence 在这里是硬要求，不是可选装饰。
+  //
+  // about="self" 是**我给自己定的规矩**，必须和"他对我的印象"分开存。
+  // 早期版本把"没落盘前不假装记得"渲染在了"他："下面 —— 那是逻辑错误，
+  // 也是一眼就能看出的"说明书味"。
   if (rel && Array.isArray(rel.traits)) {
-    for (const t of rel.traits.slice(0, 6)) {
+    for (const t of rel.traits.slice(0, 8)) {
       if (!t || typeof t.key !== 'string' || typeof t.value !== 'string') continue;
       const key = t.key.trim().slice(0, 32);
       const value = t.value.trim().slice(0, 120);
       if (key === '' || value === '') continue;
+
+      const evidence = typeof t.evidence === 'string' ? t.evidence.trim().slice(0, 160) : '';
+      const about = t.about === 'self' ? 'self' : 'user';
       const delta = clamp(t.delta, 0, 3, 1);
 
-      const existing = next.relationship.traits.find((x) => x.key === key);
+      const existing = next.relationship.traits.find((x) => x.key === key && x.about === about);
       if (existing === undefined) {
         next.relationship.traits.push({
           key,
           value,
+          evidence,
+          about,
           confidence: delta,
           salience: 0.5,
           last_reinforced: now,
@@ -338,6 +390,8 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
       } else {
         existing.confidence = Math.min(opts.maxTraitConfidence, existing.confidence + delta);
         existing.value = value; // 用最新的说法，因为模型看得到已有值
+        // 画面只在这次给了新的时才覆盖 —— 别把已有的具体例子换成空字符串
+        if (evidence !== '') existing.evidence = evidence;
         existing.salience = Math.min(1, (existing.salience ?? 0.5) + 0.1);
         existing.last_reinforced = now;
       }

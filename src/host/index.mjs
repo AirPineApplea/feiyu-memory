@@ -19,6 +19,7 @@
  */
 
 import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -178,10 +179,18 @@ export function apply(ctx, rawConfig) {
   /**
    * 日志出口。
    *
-   * 走 ctx.logger（正式渠道）；**只有开了 debugLog 才额外给 stderr 一份**。
-   * 加 stderr 那一份是因为端到端验证时发现：headless / 无人值守场景下
-   * ctx.logger 可能根本没人接，"它卡在哪一环"完全看不见。
+   * 三份去向，理由各不相同：
+   *  - `ctx.logger`：正式渠道，桌面端界面/日志能看到
+   *  - `stderr`：headless / 无人值守时 ctx.logger 可能没人接
+   *  - **`feiyu.debug.log` 文件**：进程被硬退出时前两份都会丢
+   *
+   * 第三份是端到端验证逼出来的：headless 跑完一个任务会**直接退进程**，
+   * stderr 缓冲区来不及刷，于是"它卡在哪一环"完全看不见 ——
+   * 明明日志代码写了，就是一片空白。落文件才留得住。
+   *
+   * 只有 `debugLog: true` 才写，且**只写形状、绝不写对话内容**（SPEC §6.3）。
    */
+  const DEBUG_LOG_FILE = 'feiyu.debug.log';
   const emit = (level, args) => {
     const line = `[feiyu] ${args.join(' ')}`;
     try {
@@ -194,6 +203,16 @@ export function apply(ctx, rawConfig) {
       process.stderr.write(`${line}\n`);
     } catch {
       // 没有 stderr 就只走 logger
+    }
+    try {
+      mkdirSync(archiveDirectory, { recursive: true });
+      appendFileSync(
+        path.join(archiveDirectory, DEBUG_LOG_FILE),
+        `${new Date().toISOString()} ${line}\n`,
+        'utf8',
+      );
+    } catch {
+      // 写不了就算了，日志不该影响功能
     }
   };
   const log = (...args) => {
@@ -269,9 +288,19 @@ export function apply(ctx, rawConfig) {
    * "回合结束 → 后台写日记" 这段时间里直接退出，结果是**模型答了、日记没了**。
    * 同一个坑在桌面端表现为"刚聊完就关掉 Harness，那条记忆丢了"。
    *
-   * 给一个硬上限 —— 宁可丢一条记忆，也绝不无限期挂住退出。
+   * ── 第二个坑（也是端到端验证抓的）──
+   *
+   * 这个上限原来写的是 20 秒，而**单任务自己的超时是 60 秒**。
+   * 也就是说：只要固化耗时超过 20 秒，这里就会先动手把它砍掉 ——
+   * 那个 60 秒的超时永远轮不到生效。
+   *
+   * 提示词短的时候侥幸没撞上（几秒就答完了）；把提示词写详细、
+   * 要求带 evidence 之后，输出变长、耗时跨过 20 秒，就必然丢日记。
+   *
+   * 所以这个值**必须大于单任务超时**，它只是"进程已经要死了"的最后一道保险，
+   * 不是任务的时间预算。任务的时间预算归 JOB_TIMEOUT_MS 管。
    */
-  const FLUSH_TIMEOUT_MS = 20000;
+  const FLUSH_TIMEOUT_MS = 180000;
   ctx.effect(() => () => {
     const flush = Promise.resolve()
       .then(() => drainPromise)
@@ -345,28 +374,34 @@ export function apply(ctx, rawConfig) {
         highSim: config.highSim,
         maxShow: config.maxShowPerTurn,
         wanderChance: config.wanderChance,
-        minSalience: Math.max(0.25, config.minSalience),
+        // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
+        // 门槛降到 0.15 却在这里卡 0.25，等于白降。
+        minSalience: Math.max(0.15, config.minSalience),
         now: Date.now(),
       });
+
+      // 「最近的事」—— 按时间取最近的几条，不走相似度。
+      // 这是让注入区读起来像日记而不是像检索结果的关键：
+      // 最近发生的事本来就在脑子里，不需要被"想起来"。
+      const recentCount = Number.isFinite(config.recentEntries) ? config.recentEntries : 8;
+      const recent = recentCount > 0 ? archive.diary.slice(-recentCount) : [];
 
       const rendered = renderMemoryBlock({
         persona: archive.persona,
         relationship: { ...archive.relationship, since: archive.manifest.created_at },
         lexicon: archive.lexicon,
+        recent,
         recalled: chosen,
         includePersona: config.includePersona,
         budget: config.budgetTokens,
         now: Date.now(),
       });
       text = rendered.text;
-      if (chosen.length > 0) {
-        log(`会话 ${sessionId} 想起 ${chosen.length} 条：${chosen.map((c) => c.why).join('/')}`);
-      } else {
-        // 不打内容，只打形状 —— 足够定位"为什么没想起来"
-        log(
-          `会话 ${sessionId} 第 ${s.turn} 轮：无召回（查询 ${query.length} 字，候选 ${archive.diary.length} 条，索引 ${index.N} 条）`,
-        );
-      }
+      log(
+        `会话 ${sessionId} 第 ${s.turn} 轮：最近 ${recent.length} 条在场 · 想起 ${chosen.length} 条` +
+          ` · 注入 ${rendered.tokens} token` +
+          (rendered.dropped.length > 0 ? ` · 裁掉 ${rendered.dropped.join('/')}` : ''),
+      );
     } catch (err) {
       warn(`渲染记忆失败：${err instanceof Error ? err.message : String(err)}`);
       text = '';
@@ -677,20 +712,61 @@ export function apply(ctx, rawConfig) {
       temperature: 0.2,
       signal: signal ?? abort.signal,
     };
+    // ── 思考档位：**显式关掉，绝不继承用户在聊天里选的档位** ──
+    //
+    // 这一条是端到端验证用命换来的。原来的写法是"没配就跟随当前默认模型"，
+    // 而用户在桌面端把聊天档位设成了 high —— 于是后台的固化调用也在疯狂思考，
+    // 900 个 maxTokens 全烧在推理上，正文一个字都没产出。
+    //
+    // 症状极具迷惑性：日志显示"已收 600 个 chunk / **0 字符**"，
+    // 请求正常发出、chunk 正常到达、进程正常退出、没有一条报错，
+    // 就是什么都不记。
+    //
+    // 固化是结构化抽取，不是创作。思考在这里是纯浪费，而且会挤掉答案。
     if (typeof config.reasoningEffort === 'string' && config.reasoningEffort.trim() !== '') {
       opts.reasoningEffort = config.reasoningEffort.trim();
-    } else if (typeof selection?.reasoningEffort === 'string' && selection.reasoningEffort !== '') {
-      opts.reasoningEffort = selection.reasoningEffort;
     }
 
     let text = '';
     let finish;
     let chunks = 0;
-    for await (const chunk of llm.stream(opts)) {
-      chunks++;
-      if (chunk?.type === 'text-delta') text += chunk.text;
-      else if (chunk?.type === 'finish') finish = chunk;
+    log(
+      `调用模型（system ${built.system.length} 字 / user ${built.user.length} 字` +
+        ` / maxTokens ${config.maxTokens} / 思考 ${opts.reasoningEffort ?? '默认'}）`,
+    );
+
+    // 有的 provider 不认这个档位会直接抛 UNSUPPORTED_REASONING_EFFORT。
+    // 那就退回"不指定"，而不是让整个记忆功能瘫痪。
+    const runStream = async (o) => {
+      let t = '';
+      let f;
+      let n = 0;
+      for await (const chunk of llm.stream(o)) {
+        n++;
+        if (n === 1) log(`收到第一个 chunk（${chunk?.type ?? '?'}）`);
+        if (n % 200 === 0) log(`…已收 ${n} 个 chunk / ${t.length} 字符`);
+        if (chunk?.type === 'text-delta') t += chunk.text;
+        else if (chunk?.type === 'finish') f = chunk;
+      }
+      return { text: t, finish: f, chunks: n };
+    };
+
+    let run;
+    try {
+      run = await runStream(opts);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (opts.reasoningEffort !== undefined && /REASONING_EFFORT/i.test(msg)) {
+        warn(`provider 不接受思考档位 ${opts.reasoningEffort}，退回不指定重试一次`);
+        delete opts.reasoningEffort;
+        run = await runStream(opts);
+      } else {
+        throw err;
+      }
     }
+    text = run.text;
+    finish = run.finish;
+    chunks = run.chunks;
     log(`模型返回 ${chunks} 个 chunk / ${text.length} 字符`);
 
     if (finish?.kind === 'error' || finish?.kind === 'aborted') {

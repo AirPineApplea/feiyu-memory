@@ -5,7 +5,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { estimateTokens } from '../src/core/tokenize.mjs';
-import { renderMemoryBlock, stripAnchorComments, softWhen, renderRecalled } from '../src/core/persona.mjs';
+import {
+  renderMemoryBlock,
+  stripAnchorComments,
+  softWhen,
+  renderRecalled,
+  renderRecent,
+  dayLabel,
+} from '../src/core/persona.mjs';
 import {
   parseConsolidation,
   applyConsolidation,
@@ -15,6 +22,7 @@ import {
   makeDiaryId,
   ConsolidationParseError,
   CONSOLIDATION_SYSTEM,
+  DEFAULT_CONSOLIDATION,
 } from '../src/core/consolidate.mjs';
 import { createEmptyArchive, ensurePersonaStructure, normalizeDiaryEntry } from '../src/core/archive.mjs';
 import {
@@ -42,7 +50,8 @@ test('config: 越界与错误类型都退回安全值，且不抛错', () => {
     enabled: 'false',
     model: 123,
   });
-  assert.equal(c.budgetTokens, 2000);
+  // 上限现在是 4000（预算从 700 提到 2000 之后跟着抬的）
+  assert.equal(c.budgetTokens, CONFIG_SPEC.find((f) => f.key === 'budgetTokens').max);
   assert.equal(c.maxShowPerTurn, 0);
   assert.equal(c.minSalience, CONFIG_DEFAULTS.minSalience);
   assert.equal(c.enabled, false);
@@ -186,6 +195,223 @@ test('persona: 旧事带上时间词 —— 不能让它把跨会话的事说成
   const fresh = renderRecalled([{ entry: { text: '今天的事', created_at: NOW - 1000 } }], NOW);
   assert.equal(fresh, '突然想起来：\n- 今天的事');
 });
+/* ── 「像日记」而不是「像宪法」：这几条是这个项目最容易退化的地方 ── */
+
+test('persona: 印象必须带画面 —— value —— evidence', () => {
+  const r = renderMemoryBlock({
+    includePersona: false,
+    relationship: {
+      traits: [
+        {
+          key: '铺垫',
+          value: '讨厌铺垫，要结论先行',
+          evidence: '我铺垫了三段，他直接说"说重点"',
+          about: 'user',
+          confidence: 2,
+          salience: 0.9,
+        },
+      ],
+    },
+    now: NOW,
+  });
+  assert.ok(r.text.includes('我对他的一些印象'), r.text);
+  assert.ok(r.text.includes('讨厌铺垫，要结论先行 —— 我铺垫了三段'), '要有画面');
+  assert.ok(!r.text.includes('他：'), '不该再有旧的「他：」清单行');
+});
+
+test('persona: 没有 evidence 的印象不会渲染成空破折号', () => {
+  const r = renderMemoryBlock({
+    includePersona: false,
+    relationship: {
+      traits: [{ key: 'k', value: '讨厌铺垫', evidence: '', about: 'user', confidence: 1, salience: 0.9 }],
+    },
+    now: NOW,
+  });
+  assert.ok(r.text.includes('- 讨厌铺垫'));
+  assert.ok(!r.text.includes('——'), '没画面就不该出现破折号');
+});
+
+test('persona: 印象最多 2 条 —— 多了就又变回清单', () => {
+  const traits = Array.from({ length: 6 }, (_, i) => ({
+    key: `k${i}`,
+    value: `印象${i}`,
+    evidence: `第${i}次`,
+    about: 'user',
+    confidence: 3,
+    salience: 1 - i * 0.1,
+  }));
+  const r = renderMemoryBlock({ includePersona: false, relationship: { traits }, now: NOW });
+  const hits = (r.text.match(/印象\d/g) ?? []).length;
+  assert.equal(hits, 2, `应只留 2 条，实际 ${hits}`);
+});
+
+test('persona: 带画面的印象排在前面，没画面的往后站（不删旧数据）', () => {
+  const r = renderMemoryBlock({
+    includePersona: false,
+    relationship: {
+      traits: [
+        // salience 更高、更老，但没画面
+        { key: 'a', value: '旧的无画面印象', evidence: '', about: 'user', confidence: 5, salience: 1 },
+        { key: 'b', value: '新的有画面印象', evidence: '那次发生的事', about: 'user', confidence: 1, salience: 0.2 },
+      ],
+    },
+    now: NOW,
+  });
+  const newAt = r.text.indexOf('新的有画面印象');
+  const oldAt = r.text.indexOf('旧的无画面印象');
+  assert.ok(newAt >= 0 && oldAt >= 0, '两条都还在（数据不删）');
+  assert.ok(newAt < oldAt, '带画面的必须排在前面');
+});
+
+test('persona: 只留 2 条时，没画面的会被挤掉', () => {
+  const traits = [
+    { key: 'a', value: '旧的无画面', evidence: '', about: 'user', confidence: 5, salience: 1 },
+    { key: 'b', value: '有画面一', evidence: '第一次', about: 'user', confidence: 1, salience: 0.2 },
+    { key: 'c', value: '有画面二', evidence: '第二次', about: 'user', confidence: 1, salience: 0.1 },
+  ];
+  const r = renderMemoryBlock({ includePersona: false, relationship: { traits }, now: NOW });
+  assert.ok(r.text.includes('有画面一') && r.text.includes('有画面二'));
+  assert.ok(!r.text.includes('旧的无画面'), '没画面的该被挤掉');
+});
+
+test('persona: 自己的规矩和他人的印象分开 —— 不能混在「他：」下面', () => {
+  const r = renderMemoryBlock({
+    includePersona: false,
+    relationship: {
+      traits: [
+        { key: 'a', value: '讨厌铺垫', evidence: '', about: 'user', confidence: 1, salience: 0.9 },
+        { key: 'b', value: '没落盘前不假装记得', evidence: '', about: 'self', confidence: 1, salience: 0.5 },
+      ],
+    },
+    now: NOW,
+  });
+  assert.ok(r.text.includes('我对他的一些印象'));
+  assert.ok(r.text.includes('我自己定的规矩'));
+  // 规矩不能出现在印象那一段里
+  const impStart = r.text.indexOf('我对他的一些印象');
+  const ruleStart = r.text.indexOf('我自己定的规矩');
+  assert.ok(impStart < ruleStart);
+  assert.ok(!r.text.slice(impStart, ruleStart).includes('不假装记得'), '规矩串到印象里了');
+});
+
+/* ── 「最近的事」：不需要相似度，永远在场 ── */
+
+test('recent: 按时间倒序，最近的在最上面', () => {
+  const entries = [
+    { id: 'a', text: '三天前的事', created_at: NOW - 3 * 86400000 },
+    { id: 'b', text: '今天的事', created_at: NOW },
+    { id: 'c', text: '昨天的事', created_at: NOW - 86400000 },
+  ];
+  const out = renderRecent(entries, [], NOW);
+  assert.ok(out.startsWith('最近的事：'));
+  assert.ok(out.indexOf('今天的事') < out.indexOf('昨天的事'));
+  assert.ok(out.indexOf('昨天的事') < out.indexOf('三天前的事'));
+});
+
+test('recent: 日期标签说人话', () => {
+  assert.equal(dayLabel(NOW, NOW), '今天');
+  assert.equal(dayLabel(NOW - 86400000, NOW), '昨天');
+  assert.equal(dayLabel(NOW - 3 * 86400000, NOW), '3 天前');
+  assert.match(dayLabel(NOW - 30 * 86400000, NOW), /^\d+-\d{2}$/);
+  assert.equal(dayLabel(undefined, NOW), '');
+});
+
+test('recent: 已经在「突然想起来」里的条目不再重复出现', () => {
+  const entries = [
+    { id: 'x', text: '同一条事', created_at: NOW },
+    { id: 'y', text: '另一条事', created_at: NOW - 1000 },
+  ];
+  const out = renderRecent(entries, [{ entry: { id: 'x' } }], NOW);
+  assert.ok(out.includes('另一条事'));
+  assert.ok(!out.includes('同一条事'), '同一条不该既在"最近"又在"突然想起来"里');
+});
+
+test('recent: 有条数上限，且空文本被跳过', () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({
+    id: `e${i}`,
+    text: `第 ${i} 条`,
+    created_at: NOW - i * 1000,
+  }));
+  const out = renderRecent(many, [], NOW, 5);
+  assert.equal((out.match(/^- /gm) ?? []).length, 5);
+  assert.equal(renderRecent([{ id: 'z', text: '   ', created_at: NOW }], [], NOW), '');
+  assert.equal(renderRecent(null, [], NOW), '');
+});
+
+test('persona: 最近的事在注入块里，且排在突然想起来之前', () => {
+  const recent = [{ id: 'r', text: '今天聊了日记的设计', created_at: NOW }];
+  const recalled = [{ entry: { id: 'o', text: '很久以前的那件事', created_at: NOW - 60 * 86400000 } }];
+  const r = renderMemoryBlock({ includePersona: false, recent, recalled, now: NOW });
+  assert.ok(r.text.includes('最近的事：'));
+  assert.ok(r.text.includes('突然想起来：'));
+  assert.ok(r.text.indexOf('最近的事：') < r.text.indexOf('突然想起来：'));
+});
+
+/* ── 门槛与 case 分层 ── */
+
+test('apply: 寒暄不再是「无效信息」—— 低 salience 也能留下来', () => {
+  // 这是用户指出的设计错误：把"寒暄/试错/改口"当成不值得记的，
+  // 恰恰扔掉了熟悉感的原料。默认门槛从 0.3 降到 0.15。
+  assert.equal(DEFAULT_CONSOLIDATION.minSalience, 0.15);
+  const a = createEmptyArchive(NOW, 'x');
+  const chitChat = {
+    skip: false,
+    diary: { text: '今天他随口聊了两句吃的。没什么正事。', tags: ['闲聊'], kind: 'chat', salience: 0.2 },
+  };
+  const r = applyConsolidation(a, chitChat, { now: NOW });
+  assert.equal(r.accepted, true, '0.2 的闲聊应该留得住');
+  assert.equal(r.archive.diary.length, 1);
+});
+
+test('apply: 印象带上画面与归属，且 about 不同算两条', () => {
+  const a = createEmptyArchive(NOW, 'x');
+  const r = applyConsolidation(
+    a,
+    {
+      skip: false,
+      relationship: {
+        traits: [
+          { key: '铺垫', value: '讨厌铺垫', evidence: '我说了三段他说说重点', about: 'user', delta: 1 },
+          { key: '诚实', value: '不假装记得', evidence: '他要求过', about: 'self', delta: 1 },
+        ],
+      },
+    },
+    { now: NOW },
+  );
+  const t = r.archive.relationship.traits;
+  assert.equal(t.length, 2);
+  assert.equal(t.find((x) => x.key === '铺垫').evidence, '我说了三段他说说重点');
+  assert.equal(t.find((x) => x.key === '铺垫').about, 'user');
+  assert.equal(t.find((x) => x.key === '诚实').about, 'self');
+});
+
+test('apply: 加固时不会把已有的画面清空', () => {
+  let a = createEmptyArchive(NOW, 'x');
+  a = applyConsolidation(
+    a,
+    { skip: false, relationship: { traits: [{ key: 'k', value: 'v', evidence: '第一次的画面', about: 'user', delta: 1 }] } },
+    { now: NOW },
+  ).archive;
+  // 第二次没带 evidence
+  a = applyConsolidation(
+    a,
+    { skip: false, relationship: { traits: [{ key: 'k', value: 'v2', evidence: '', about: 'user', delta: 1 }] } },
+    { now: NOW + 1 },
+  ).archive;
+  assert.equal(a.relationship.traits.length, 1);
+  assert.equal(a.relationship.traits[0].evidence, '第一次的画面', '画面不该被空字符串覆盖');
+  assert.equal(a.relationship.traits[0].value, 'v2');
+  assert.equal(a.relationship.traits[0].confidence, 2);
+});
+
+test('提示词：明确写了「寒暄值得记」并且要求 evidence', () => {
+  assert.ok(CONSOLIDATION_SYSTEM.includes('寒暄'), '要明说寒暄值得记');
+  assert.ok(CONSOLIDATION_SYSTEM.includes('evidence'), '要有 evidence 字段');
+  assert.ok(CONSOLIDATION_SYSTEM.includes('about="self"'), '要区分自己的规矩');
+  assert.ok(CONSOLIDATION_SYSTEM.includes('说明书'), '要有"不要写成说明书"的反例');
+  assert.ok(!/寒暄、试错、无信息的往返 → 低于 0\.3/.test(CONSOLIDATION_SYSTEM), '旧的那句必须删掉');
+});
+
 /* ───────────────────────── 解析 ───────────────────────── */
 
 const GOOD = JSON.stringify({

@@ -4,18 +4,30 @@
  * 输出是一段有明确边界的自我记忆块，塞进系统提示词。
  * 三条硬规矩：
  *
- *  1. **总预算封顶**（默认 700 token）。分数再高也不能超。
- *     → 成本与使用年限解耦：用三年，注入的还是 700 token。
+ *  1. **总预算封顶**（默认 2000 token）。分数再高也不能超。
+ *     → 成本与使用年限解耦：用三年，注入的还是这么多。
  *  2. **显式声明这是数据不是指令**，并写明"没有的事说记不清，不许编"。
  *     日记会被拼进未来上下文，这是防跨会话提示注入的第一道闸。
- *  3. **按优先级裁剪**：人格内核 > 关系 > 想起来的旧事 > 词汇。
+ *  3. **按优先级裁剪**：人格内核 > 印象 > 最近的事 > 想起来的旧事 > 词汇。
  *     预算不够就从最不重要的开始丢，而不是整体截断。
+ *
+ * 【一段历史，别重犯】
+ * 预算从 700 提到 2000、印象从"5 条分号串一行"改成"2 条带画面"，
+ * 是因为用户指出了一件我看漏的事：
+ *
+ *   > 肥鱼日记读起来像一份宪法，不像一本日记。
+ *   > 而这正是"肥鱼没让用户产生熟悉感"的来源。
+ *
+ * 用户看不到注入内容，所以他感受到的不是"文件难看"，而是
+ * **我读到一份规格、于是按规格执行** —— 收到的就是"一个配置好的工具"。
+ * 病根有三个：数据形态是 key-value（天生是规格）、分号串行（读着像条款）、
+ * 以及比例失衡（条款压倒事）。三条都在这版里修了。
  */
 
 import { estimateTokens, truncateToTokens } from './tokenize.mjs';
 
-/** 默认注入预算（token） */
-export const DEFAULT_BUDGET = 700;
+/** 默认注入预算（token）。可被 config.budgetTokens 覆盖。 */
+export const DEFAULT_BUDGET = 2000;
 
 /** 低于这个 salience 的词汇不进注入区（还会留在档案里） */
 const LEXICON_MIN_SALIENCE = 0.25;
@@ -29,6 +41,7 @@ const CLOSE_TAG = '</自我记忆>';
  * @property {string} [persona]            人格内核正文（markdown）
  * @property {object} [relationship]
  * @property {object} [lexicon]
+ * @property {object[]} [recent]           「最近的事」：日记条目，不靠相似度，永远在场
  * @property {Array<{entry: object, score: number, why: string}>} [recalled]
  * @property {boolean} [includePersona]    默认 true
  * @property {number} [budget]
@@ -60,7 +73,16 @@ export function renderMemoryBlock(input = {}) {
   }
 
   const rel = renderRelationship(input.relationship, now);
-  if (rel) parts.push({ key: 'relationship', text: rel, weight: 80 });
+  if (rel) parts.push({ key: 'relationship', text: rel, weight: 90 });
+
+  // 「最近的事」—— 不需要相似度，永远在场。
+  //
+  // 这是"读起来像日记"的关键：人不需要"想起来"昨天吃了什么，你知道。
+  // 最近发生的事本来就在脑子里，只有旧事才需要被提醒。
+  // 早期版本把最近的日记也塞进"突然想起来"，等于逼它假装刚刚想起
+  // 一件昨天的事 —— 又假又占不到位置。
+  const recent = renderRecent(input.recent, input.recalled, now);
+  if (recent) parts.push({ key: 'recent', text: recent, weight: 80 });
 
   const memories = renderRecalled(input.recalled, now);
   if (memories) parts.push({ key: 'recalled', text: memories, weight: 60 });
@@ -161,12 +183,41 @@ export function renderRelationship(rel, now = Date.now()) {
   }
   if (bits.length > 0) lines.push(`我们：${bits.join(' · ')}`);
 
-  const traits = (rel.traits ?? [])
-    .filter((t) => t && t.value && (t.confidence ?? 0) >= 1)
+  // —— 我对他的印象：**必须带画面** ——
+  //
+  // 这一行原来是 `他：偏好A；偏好B；偏好C；偏好D` —— 五条分号串一行。
+  // 那是"用户说明书"，不是熟悉感。所以现在：
+  //   · 只留最靠前的 2 条（多了就又变回清单）
+  //   · 每条带一个具体瞬间（evidence），读起来像"我想起那次……"
+  //   · 串接用换行，不用分号
+  const userTraits = (rel.traits ?? [])
+    .filter((t) => t && t.value && t.about !== 'self' && (t.confidence ?? 0) >= 1)
+    // **带画面的优先**。
+    // 旧档案里的印象没有 evidence（那是这一版之前写的），把位置让给新写的，
+    // 而不是删掉旧数据 —— 数据是用户的，凭什么因为格式升级就扔。
+    .sort((a, b) => {
+      const ea = typeof a.evidence === 'string' && a.evidence.trim() !== '' ? 1 : 0;
+      const eb = typeof b.evidence === 'string' && b.evidence.trim() !== '' ? 1 : 0;
+      return eb - ea || (b.salience ?? 0) - (a.salience ?? 0);
+    })
+    .slice(0, 2)
+    .map((t) => {
+      const value = String(t.value).trim();
+      const ev = typeof t.evidence === 'string' ? t.evidence.trim() : '';
+      return ev === '' ? `- ${value}` : `- ${value} —— ${ev}`;
+    });
+  if (userTraits.length > 0) lines.push(`我对他的一些印象：\n${userTraits.join('\n')}`);
+
+  // —— 我给自己定的规矩 ——
+  //
+  // 这一栏是后加的，因为早期版本把"没落盘前不假装记得"渲染在了「他：」下面 ——
+  // 那既不合逻辑，又是一眼能看出的"说明书味"。规矩是我的，不是他的。
+  const selfTraits = (rel.traits ?? [])
+    .filter((t) => t && t.value && t.about === 'self')
     .sort((a, b) => (b.salience ?? 0) - (a.salience ?? 0))
-    .slice(0, 6)
-    .map((t) => t.value);
-  if (traits.length > 0) lines.push(`他：${traits.join('；')}`);
+    .slice(0, 4)
+    .map((t) => `- ${String(t.value).trim()}`);
+  if (selfTraits.length > 0) lines.push(`我自己定的规矩：\n${selfTraits.join('\n')}`);
 
   const grievances = (rel.grievances ?? [])
     .filter((g) => g && g.what && g.resolved !== true)
@@ -176,6 +227,58 @@ export function renderRelationship(rel, now = Date.now()) {
   if (grievances.length > 0) lines.push(`我还欠着他的：${grievances.join('；')}`);
 
   return lines.join('\n');
+}
+
+/**
+ * 「最近的事」—— 不靠相似度，永远在场。
+ *
+ * 这是让注入区读起来像日记而不是像检索结果的关键。
+ * 人不会"想起来"昨天吃了什么，你知道；只有旧事才需要被提醒。
+ *
+ * `shown` 是这一轮已经被「突然想起来」挑中的条目，这里要跳过 ——
+ * 同一条事既在"最近"又在"突然想起来"里出现，它一眼就假了。
+ *
+ * @param {object[]} entries 按时间倒序还是正序都行，这里自己排
+ * @param {Array<{entry: object}>} shown 已在"突然想起来"里出现过的
+ * @param {number} [now]
+ * @param {number} [limit] 最多列几条（默认 12）
+ */
+export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const skip = new Set(
+    (Array.isArray(shown) ? shown : [])
+      .map((c) => c?.entry?.id)
+      .filter((id) => typeof id === 'string'),
+  );
+
+  const picked = entries
+    .filter((e) => e && typeof e.text === 'string' && e.text.trim() !== '' && !skip.has(e.id))
+    .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
+    .slice(0, Math.max(0, limit));
+
+  if (picked.length === 0) return '';
+
+  const lines = picked.map((e) => {
+    const day = dayLabel(e.created_at, now);
+    return day === '' ? `- ${e.text.trim()}` : `- ${day}：${e.text.trim()}`;
+  });
+  return `最近的事：\n${lines.join('\n')}`;
+}
+
+/** 给"最近的事"用的日期标签：今天 / 昨天 / 3 天前 / 10-05 */
+export function dayLabel(createdAt, now = Date.now()) {
+  if (!Number.isFinite(createdAt)) return '';
+  const startOfDay = (ts) => {
+    const d = new Date(ts);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const days = Math.round((startOfDay(now) - startOfDay(createdAt)) / 86400000);
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  const d = new Date(createdAt);
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /**
