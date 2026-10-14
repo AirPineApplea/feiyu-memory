@@ -40,6 +40,7 @@ import { buildIndex, selectMemories, DEFAULT_RECALL_OPTIONS } from '../core/reca
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
+import { calendarDaysBetween } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import {
   buildConsolidationInput,
@@ -1007,7 +1008,9 @@ export function apply(ctx, rawConfig) {
         .filter((g) => g && g.resolved !== true)
         .map((g) => g.what),
       facts: {
-        days: Number.isFinite(since) ? Math.max(0, Math.floor((Date.now() - since) / 86400000)) : 0,
+        // 跟注入层用同一把尺子（timeline.mjs）—— 面板说"认识 1 天"、
+        // 注入里说"2 天前"，是同一类 bug 换了个出口
+        days: calendarDaysBetween(since, Date.now()),
         nickname: typeof rel.nickname === 'string' ? rel.nickname : '',
         lexicon: (archive.lexicon?.items ?? [])
           .filter((i) => i && typeof i.term === 'string')

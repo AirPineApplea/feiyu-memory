@@ -41,6 +41,14 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
    - about="user"：我对他这个人的印象
    - about="self"：我给我自己定的规矩（比如"没落盘前不假装记得"）
    **不要把自己的规矩写进 about="user" 里。**
+9. **日记正文里不要写"今天""昨天""前天"这类时间词。**
+   时间由系统在别处标注，你写了就会变成"昨天：他今天……"——读起来
+   是机器拼的，人不会这么记事儿。
+
+   写"他让我写个东西，我没问清语言就动手了"，不写"今天他让我写个东西……"。
+   同理不要写"刚才""今晚""昨晚"。
+
+   唯一例外是**他说的原话里本来就有**（引号里的照抄不动）。
 
 【第 2 条展开：具体 vs 抽象】
 
@@ -89,7 +97,8 @@ evidence 是必填的：一句话说清"哪次让我有了这个印象"。写不
 
 正例 ——
 输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
-输出：{"skip":false,"diary":{"text":"今天他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码","沟通失误"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","evidence":"我没问语言就写了 Java，他纠正我","about":"user","delta":1}],"grievances":[{"what":"没问清语言就动手","intensity":0.6,"resolved":false}]},"lexicon":[],"forget":[]}
+输出：{"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码","沟通失误"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","evidence":"我没问语言就写了 Java，他纠正我","about":"user","delta":1}],"grievances":[{"what":"没问清语言就动手","intensity":0.6,"resolved":false}]},"lexicon":[],"forget":[]}
+注意这条正例**没有写"今天"** —— 见上面第 9 条。
 
 反例一（流水账，绝对不要）——
 {"skip":false,"diary":{"text":"用户发送了一条消息，我进行了回复，用户表示不满意，我随后进行了调整。","tags":[],"kind":"chat","salience":0.9,"resolved":null}}

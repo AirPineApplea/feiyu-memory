@@ -12,6 +12,8 @@ import {
   renderRecalled,
   renderRecent,
   dayLabel,
+  calendarDaysBetween,
+  stripTimeWords,
 } from '../src/core/persona.mjs';
 import {
   parseConsolidation,
@@ -169,13 +171,101 @@ test('persona: 只注入还活跃的词汇', () => {
 });
 
 test('persona: 时间词说人话，且今天的事不加前缀', () => {
-  const day = 86400000;
-  assert.equal(softWhen(NOW - 0.5 * day, NOW), '', '今天不提时间');
-  assert.equal(softWhen(NOW - 2 * day, NOW), '前两天');
-  assert.equal(softWhen(NOW - 6 * day, NOW), '前阵子');
-  assert.equal(softWhen(NOW - 30 * day, NOW), '上个月前后');
-  assert.equal(softWhen(NOW - 400 * day, NOW), '很久以前');
-  assert.equal(softWhen(undefined, NOW), '');
+  // 用**确定的日历偏移**构造，不要用 `NOW - 0.5 * day` 这种写法 ——
+  // 换成自然日之后，那种写法的结果会随"现在几点"漂。
+  const ref = new Date(NOW);
+  ref.setHours(12, 0, 0, 0);
+  const at = (daysAgo, hour = 12) => {
+    const d = new Date(ref);
+    d.setDate(d.getDate() - daysAgo);
+    d.setHours(hour, 0, 0, 0);
+    return d.getTime();
+  };
+  assert.equal(softWhen(at(0), ref.getTime()), '', '今天不提时间');
+  assert.equal(softWhen(at(3), ref.getTime()), '前两天');
+  assert.equal(softWhen(at(10), ref.getTime()), '前阵子');
+  assert.equal(softWhen(at(30), ref.getTime()), '上个月前后');
+  assert.equal(softWhen(at(400), ref.getTime()), '很久以前');
+  assert.equal(softWhen(undefined, ref.getTime()), '');
+});
+
+/* ── 「一天」只能有一种算法（另一个肥鱼从输出那侧挑出来的毛病） ── */
+
+test('timeline: 「认识 N 天」和「N 天前」必须用同一把尺子', () => {
+  // 经典打架场景：晚上 23:00 认识，次日上午 9:00 看。
+  // 旧代码里 renderRelationship 按整 24 小时算 → "认识 1 天"，
+  // dayLabel 按自然日算 → "2 天前"。两个数并排躺在同一块记忆里。
+  const seenAt = new Date(NOW);
+  seenAt.setHours(9, 0, 0, 0);
+  const metAt = new Date(seenAt);
+  metAt.setDate(metAt.getDate() - 2);
+  metAt.setHours(23, 0, 0, 0);
+
+  assert.equal(
+    calendarDaysBetween(metAt.getTime(), seenAt.getTime()),
+    2,
+    '昨晚 23 点到今天上午 9 点，按人的直觉是 2 天',
+  );
+  assert.equal(dayLabel(metAt.getTime(), seenAt.getTime()), '2 天前');
+
+  const r = renderMemoryBlock({
+    includePersona: false,
+    relationship: { since: metAt.getTime(), traits: [] },
+    now: seenAt.getTime(),
+  });
+  assert.ok(r.text.includes('认识 2 天'), `不能再说"认识 1 天"：${r.text}`);
+});
+
+test('timeline: 全项目只有一处定义"一天"', async () => {
+  // 想加第四种日期算法的话，这条会红 —— 那是故意的。
+  const { readFile } = await import('node:fs/promises');
+  const files = ['src/core/persona.mjs', 'src/core/render-diary.mjs', 'src/host/index.mjs'];
+  for (const f of files) {
+    const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+    assert.ok(
+      !/\/\s*86400000/.test(code),
+      `${f} 里又自己算了毫秒差 —— 日期只该在 timeline.mjs 里算`,
+    );
+  }
+});
+
+test('timeline: 正文里的时间词会被摘掉（时间由前缀给）', () => {
+  assert.equal(stripTimeWords('今天他让我写个东西，我没问清语言。'), '他让我写个东西，我没问清语言。');
+  assert.equal(stripTimeWords('他今天连着追问了三次。'), '他连着追问了三次。');
+  assert.equal(stripTimeWords('昨天我说错了话。'), '我说错了话。');
+  assert.equal(stripTimeWords('刚才他又改口了。'), '他又改口了。');
+  assert.equal(stripTimeWords('今天，他正式给了我一条规矩。'), '他正式给了我一条规矩。');
+  // 叙述性的"那天"不碰 —— 它跟前缀不打架
+  assert.equal(stripTimeWords('那天他说要写小说。'), '那天他说要写小说。');
+  // 摘没了就别动它：宁可留一个多余的"今天"，也不要把记忆变成空壳
+  assert.equal(stripTimeWords('今天'), '今天');
+  assert.equal(stripTimeWords(''), '');
+  assert.equal(stripTimeWords(undefined), '');
+});
+
+test('render: 「最近的事」不会出现「昨天：他今天……」这种自相矛盾', () => {
+  const recent = [
+    { id: 'a', text: '今天他正式给了我一条规矩：解答之前先问细节。', created_at: NOW - 86400000 },
+  ];
+  const out = renderRecent(recent, [], NOW);
+  assert.match(out, /昨天：他正式给了我一条规矩/);
+  assert.ok(!/昨天：他今天/.test(out), `时间词写了两遍：${out}`);
+});
+
+test('render: 「突然想起来」同样不会双写时间词', () => {
+  const recalled = [
+    {
+      entry: {
+        id: 'b',
+        text: '今天他连着追问 AGENTS.md 和肥鱼日记的区别。',
+        created_at: NOW - 5 * 86400000,
+      },
+    },
+  ];
+  const out = renderRecalled(recalled, NOW);
+  assert.match(out, /前阵子，他连着追问/);
+  assert.ok(!/他今天连着/.test(out), `时间词写了两遍：${out}`);
 });
 
 test('persona: 旧事带上时间词 —— 不能让它把跨会话的事说成"上一轮"', () => {

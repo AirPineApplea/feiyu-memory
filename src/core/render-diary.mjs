@@ -15,6 +15,8 @@
  * JSONL 仍然是唯一真相源：追加安全、坏一行只丢一行。
  */
 
+import { calendarDaysBetween } from './timeline.mjs';
+
 const KINDS = {
   failure: '搞砸了',
   win: '干得不错',
@@ -39,7 +41,8 @@ function localTime(ts) {
 
 /** 认识多久了，说人话 */
 function humanDuration(fromTs, now) {
-  const days = Math.max(0, Math.floor((now - fromTs) / 86400000));
+  // 自然日，跟注入层、面板用同一把尺子（timeline.mjs）
+  const days = calendarDaysBetween(fromTs, now);
   if (days < 1) return '今天刚认识';
   if (days < 30) return `认识 ${days} 天`;
   const months = Math.floor(days / 30);

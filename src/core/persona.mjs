@@ -25,6 +25,7 @@
  */
 
 import { estimateTokens, truncateToTokens } from './tokenize.mjs';
+import { calendarDaysBetween, dayLabel, softWhen, stripTimeWords } from './timeline.mjs';
 
 /** 默认注入预算（token）。可被 config.budgetTokens 覆盖。 */
 export const DEFAULT_BUDGET = 2000;
@@ -173,7 +174,11 @@ export function renderRelationship(rel, now = Date.now()) {
 
   const bits = [];
   if (Number.isFinite(rel.since) && rel.since > 0) {
-    const days = Math.max(0, Math.floor((now - rel.since) / 86400000));
+    // **用自然日，不用整 24 小时**。
+    // 这里原来是 floor((now − since) / 86400000)，跟 dayLabel 的自然日算法
+    // 差一档 —— 于是同一块记忆里会出现"认识 1 天"和"2 天前"并排躺着。
+    // 读者一眼就看出这是程序拼的。详见 timeline.mjs 的模块注释。
+    const days = calendarDaysBetween(rel.since, now);
     bits.push(days < 1 ? '今天刚认识' : `认识 ${days} 天`);
   } else if (rel.familiarity > 0) {
     bits.push(rel.familiarity >= 0.7 ? '很熟了' : rel.familiarity >= 0.3 ? '聊过一阵了' : '刚认识不久');
@@ -260,25 +265,12 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
 
   const lines = picked.map((e) => {
     const day = dayLabel(e.created_at, now);
-    return day === '' ? `- ${e.text.trim()}` : `- ${day}：${e.text.trim()}`;
+    // 正文里可能还留着写入那天写的"今天" —— 摘掉，时间只由前缀给。
+    // 老档案里这种词一大把，不能指望重写用户的数据来修。
+    const body = stripTimeWords(e.text);
+    return day === '' ? `- ${body}` : `- ${day}：${body}`;
   });
   return `最近的事：\n${lines.join('\n')}`;
-}
-
-/** 给"最近的事"用的日期标签：今天 / 昨天 / 3 天前 / 10-05 */
-export function dayLabel(createdAt, now = Date.now()) {
-  if (!Number.isFinite(createdAt)) return '';
-  const startOfDay = (ts) => {
-    const d = new Date(ts);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  };
-  const days = Math.round((startOfDay(now) - startOfDay(createdAt)) / 86400000);
-  if (days <= 0) return '今天';
-  if (days === 1) return '昨天';
-  if (days < 7) return `${days} 天前`;
-  const d = new Date(createdAt);
-  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 /**
@@ -287,6 +279,9 @@ export function dayLabel(createdAt, now = Date.now()) {
  * 每条前面带一个**模糊的时间词** —— 端到端验证时发现，不给时间线索的话
  * 模型会把跨会话的事说成"上一轮"发生在本对话里的，很出戏。
  * 但也不能写日期：鱼不会说"根据 10 月 12 日的记录"。所以用"前阵子"这类词。
+ *
+ * 注意它和 `renderRecent` **共用 `timeline.mjs` 那把尺子**，只是换了说法。
+ * 词汇差异（"昨天" vs "前两天"）是有意的语气区别，算法差异才是 bug。
  *
  * @param {Array<{entry: object}>} recalled
  * @param {number} [now]
@@ -298,22 +293,20 @@ export function renderRecalled(recalled, now = Date.now()) {
     .slice(0, 2)
     .map((c) => {
       const when = softWhen(c.entry.created_at, now);
-      return when === '' ? `- ${c.entry.text.trim()}` : `- ${when}，${c.entry.text.trim()}`;
+      const body = stripTimeWords(c.entry.text);
+      return when === '' ? `- ${body}` : `- ${when}，${body}`;
     });
   if (lines.length === 0) return '';
   return `突然想起来：\n${lines.join('\n')}`;
 }
 
-/** 把时间差说成人话。今天的事不加前缀。 */
-export function softWhen(createdAt, now = Date.now()) {
-  if (!Number.isFinite(createdAt)) return '';
-  const days = (now - createdAt) / 86400000;
-  if (days < 1) return '';
-  if (days < 3) return '前两天';
-  if (days < 12) return '前阵子';
-  if (days < 60) return '上个月前后';
-  return '很久以前';
-}
+/**
+ * 日期与时间词**全部**来自 `timeline.mjs`，这里只做转发。
+ *
+ * 保留转发是为了不破坏已有调用方（测试和 host 都从 persona 引这几个名字）。
+ * 但**定义只有一份** —— 这就是那位读者要的"只允许在一处生成"。
+ */
+export { calendarDaysBetween, dayLabel, softWhen, stripTimeWords } from './timeline.mjs';
 
 /** 常说的词与梗。只放还活跃的。 */
 export function renderLexicon(lexicon) {
