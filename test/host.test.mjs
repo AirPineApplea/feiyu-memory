@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -47,6 +47,22 @@ function makeHarness(reply = GOOD_REPLY) {
   let streamCalls = 0;
   let llmReply = reply;
 
+  /**
+   * 假的 webServer —— 记录面板注册的路由，测试可以直接驱动它们。
+   *
+   * 有它之后，**每个** host 测试都会真的跑一遍面板接口注册，
+   * 所以"注册路由把插件搞挂了"这种错会被所有用例一起抓到。
+   */
+  const routes = new Map();
+  const webServer = {
+    register(route) {
+      const key = `${route.kind}:${route.path}`;
+      if (routes.has(key)) throw new Error(`route 重复注册：${key}`);
+      routes.set(key, route);
+      return () => routes.delete(key);
+    },
+  };
+
   const llm = {
     stream(opts) {
       streamCalls += 1;
@@ -63,6 +79,7 @@ function makeHarness(reply = GOOD_REPLY) {
     logger: { info() {}, warn() {}, debug() {} },
     get(n) {
       if (n === 'llm') return llm;
+      if (n === 'webServer') return webServer;
       if (n === 'agentDefaultModel') {
         return {
           currentSelection: () => ({
@@ -78,6 +95,22 @@ function makeHarness(reply = GOOD_REPLY) {
       const d = fn();
       if (typeof d === 'function') disposers.push(d);
       return d;
+    },
+    /**
+     * 简化版 Cordis inject：依赖都在就立刻回调，缺一个就永远不回调。
+     * 真实 Cordis 会在服务就绪时异步回调；测试只关心"在/不在"两种情形。
+     */
+    inject(deps, cb) {
+      const scope = {};
+      for (const d of deps) {
+        const v = ctx.get(d);
+        if (v === undefined) return { dispose() {} };
+        scope[d] = v;
+      }
+      scope.effect = ctx.effect;
+      const d = cb(scope);
+      if (typeof d === 'function') disposers.push(d);
+      return { dispose() {} };
     },
     on(n, fn) {
       handlers.set(n, [...(handlers.get(n) ?? []), fn]);
@@ -124,6 +157,29 @@ function makeHarness(reply = GOOD_REPLY) {
     makeAgent,
     provided,
     disposers,
+    routes,
+    /** 驱动一条已注册的面板路由，模拟一次 HTTP 请求 */
+    async callRoute(routePath, { method = 'GET', body } = {}) {
+      const route = [...routes.values()].find((r) => r.path === routePath);
+      if (route === undefined) throw new Error(`没有注册路由 ${routePath}（现有：${[...routes.keys()].join(', ')}）`);
+      const req = (async function* gen() {
+        if (body !== undefined) yield Buffer.from(JSON.stringify(body), 'utf8');
+      })();
+      req.method = method;
+      const res = {
+        statusCode: 0,
+        headers: {},
+        body: undefined,
+        setHeader(k, v) {
+          this.headers[String(k).toLowerCase()] = v;
+        },
+        end(data) {
+          this.body = data;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    },
     getLastRequest: () => lastRequest,
     getStreamCalls: () => streamCalls,
     setReply: (r) => {
@@ -550,5 +606,195 @@ test('host: 焚毁会清掉记忆但保留人格锚点', async () => {
     assert.equal(snap.relationship.traits.length, 0);
     assert.ok(snap.persona.includes('feiyu:anchor:begin'), '锚点标记必须在');
     assert.ok(snap.persona.includes('蓝色大肥鱼'), '出厂人格必须还在');
+  });
+});
+
+/* ─────────────────── 客户端面板的数据接口 ─────────────────── */
+
+/**
+ * 面板读日记走的是 HTTP，不是 Cordis RPC —— 理由见 src/host/index.mjs
+ * 里 `PANEL_BASE` 那段注释（已安装的客户端插件拿不到自己的 host RPC）。
+ *
+ * 这一组测试盯三件事：**能看、能删、能带走**，外加一条安全回归。
+ */
+
+const SAMPLE = createEmptyArchive(NOW, ensurePersonaStructure('# 测试人格'));
+
+/** 面板测试的种子档案。**必须在 apply 之前落盘** —— 插件是在 apply 时读档案的。 */
+function makeSeed() {
+  return {
+    ...SAMPLE,
+    diary: [
+      // 注意 normalizeDiaryEntry 只收一个参数，id/created_at/session 都得写全。
+      // 少了 id 就会变成字符串 "undefined"，两条日记撞成同一个 id。
+      normalizeDiaryEntry({
+        id: 'd_test_01',
+        text: '他让我写排序，我没问清语言就动手了。',
+        tags: ['代码'],
+        kind: 'failure',
+        salience: 0.7,
+        created_at: NOW - 86400000,
+        session: 's1',
+      }),
+      normalizeDiaryEntry({
+        id: 'd_test_02',
+        text: '他翻出一篇很久以前写的小说发给我看。',
+        tags: ['小说'],
+        kind: 'chat',
+        salience: 0.5,
+        created_at: NOW,
+        session: 's1',
+      }),
+    ],
+    relationship: {
+      ...SAMPLE.relationship,
+      nickname: '肥鱼',
+      traits: [
+        {
+          key: '铺垫',
+          value: '讨厌铺垫',
+          evidence: '我说了三段他说说重点',
+          about: 'user',
+          confidence: 2,
+          salience: 0.8,
+        },
+        { key: '诚实', value: '不假装记得', evidence: '', about: 'self', confidence: 1, salience: 0.5 },
+      ],
+    },
+  };
+}
+
+/** 起一个已经读到种子档案的插件 */
+async function seededHarness(home) {
+  const h = makeHarness();
+  apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+  await h.provided.get('feiyuMemory').snapshot();
+  return h;
+}
+
+test('panel: 三个接口都注册上了', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    assert.deepEqual(
+      [...h.routes.keys()].sort(),
+      ['exact:/feiyu-diary/export', 'exact:/feiyu-diary/forget', 'exact:/feiyu-diary/state'],
+    );
+  }, { seed: makeSeed() });
+});
+
+test('panel: GET /state 给出界面要的字段，且按时间倒序', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const res = await h.callRoute('/feiyu-diary/state');
+    assert.equal(res.statusCode, 200);
+    assert.match(res.headers['content-type'], /application\/json/);
+    const body = JSON.parse(res.body);
+
+    assert.equal(body.ok, true);
+    assert.equal(body.count, 2);
+    assert.equal(body.diary.length, 2);
+    assert.ok(body.diary[0].text.includes('小说'), '最近的排最前');
+    assert.ok(body.diary[1].text.includes('排序'));
+
+    const mine = body.traits.filter((t) => t.about === 'user');
+    const self = body.traits.filter((t) => t.about === 'self');
+    assert.equal(mine.length, 1);
+    assert.equal(self.length, 1);
+    assert.equal(mine[0].evidence, '我说了三段他说说重点');
+    assert.equal(body.facts.nickname, '肥鱼');
+  }, { seed: makeSeed() });
+});
+
+test('panel: POST /forget 真的删掉，界面上就没有了', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const before = await h.callRoute('/feiyu-diary/state');
+    const target = JSON.parse(before.body).diary[0];
+    assert.ok(target.id);
+
+    const res = await h.callRoute('/feiyu-diary/forget', { method: 'POST', body: { id: target.id } });
+    assert.equal(res.statusCode, 200);
+    const out = JSON.parse(res.body);
+    assert.equal(out.removed, true);
+    assert.equal(out.count, 1);
+
+    const after = await h.callRoute('/feiyu-diary/state');
+    const body = JSON.parse(after.body);
+    assert.equal(body.count, 1);
+    assert.ok(!body.diary.some((e) => e.id === target.id));
+  }, { seed: makeSeed() });
+});
+
+test('panel: 删掉的那条会从磁盘上一起消失（不是只从界面消失）', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const svc = h.provided.get('feiyuMemory');
+    const snap = await svc.snapshot();
+    const target = snap.diary.find((e) => e.text.includes('排序'));
+    assert.ok(target, '种子里应该有那条');
+
+    assert.equal(await svc.forget(target.id), true);
+
+    // 关键：不只是内存里少了，**磁盘上也得少了** —— 否则重启又回来了。
+    const raw = await readFile(
+      path.join(dataDirFor(home), 'diary', new Date(target.created_at).toISOString().slice(0, 7) + '.jsonl'),
+      'utf8',
+    );
+    assert.ok(!raw.includes(target.id), '磁盘上不该还有这条');
+    assert.equal((await svc.snapshot()).diaryCount, 1);
+  }, { seed: makeSeed() });
+});
+
+test('panel: forget 一个不存在的 id 会老实说没删掉', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const res = await h.callRoute('/feiyu-diary/forget', { method: 'POST', body: { id: 'd_nope' } });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).removed, false);
+  }, { seed: makeSeed() });
+});
+
+test('panel: GET /export 返回可下载的字节', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const res = await h.callRoute('/feiyu-diary/export');
+    assert.equal(res.statusCode, 200);
+    assert.match(res.headers['content-disposition'], /attachment/);
+    assert.ok(res.body.length > 100, '应该是一个真的 zip');
+    assert.equal(res.body[0], 0x50);
+    assert.equal(res.body[1], 0x4b, 'ZIP 魔数 PK');
+  }, { seed: makeSeed() });
+});
+
+test('panel: 方法不对返回 405，不会误伤数据', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    assert.equal((await h.callRoute('/feiyu-diary/state', { method: 'POST' })).statusCode, 405);
+    assert.equal((await h.callRoute('/feiyu-diary/forget', { method: 'GET' })).statusCode, 405);
+  }, { seed: makeSeed() });
+});
+
+test('panel: 响应不带 CORS 头 —— 这是真正有意义的防护', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const res = await h.callRoute('/feiyu-diary/state');
+    const keys = Object.keys(res.headers).join(' ');
+    assert.ok(
+      !/access-control-allow-origin/i.test(keys),
+      '加了 CORS 就等于把私人日记开放给浏览器里任何网站',
+    );
+  }, { seed: makeSeed() });
+});
+
+test('panel: 没有 webServer 服务时安静跳过，不影响插件其余部分', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    const origGet = h.ctx.get;
+    h.ctx.get = (n) => (n === 'webServer' ? undefined : origGet(n));
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    assert.equal(h.routes.size, 0, '没有 webServer 就不该注册任何路由');
+    const svc = h.provided.get('feiyuMemory');
+    assert.ok(svc, 'feiyuMemory 服务必须还在');
+    assert.equal((await svc.snapshot()).ready, true);
   });
 });

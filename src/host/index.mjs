@@ -817,6 +817,32 @@ export function apply(ctx, rawConfig) {
 
   /* ── 导出 / 导入（v0.1 先只做导出，路径可预期） ── */
 
+  /**
+   * 忘掉某一条日记 —— 面板上那个「忘掉」按钮，以及服务上的同名方法。
+   *
+   * 抽成独立函数而不是写在 `ctx.provide` 的对象字面量里，是因为
+   * **HTTP 路由也要用它**。路由跟服务都在 apply 作用域内，
+   * 直接调本地函数比 `ctx.feiyuMemory.forget(...)` 绕一圈清楚得多，
+   * 也少一次"服务到底注册上没有"的隐式依赖。
+   *
+   * 这一条是这个插件必须有的：在那之前，想删一条记忆得自己去编辑
+   * 日记的 jsonl 文件。会做这件事的人不需要面板，需要面板的人不会做这件事。
+   *
+   * @returns {Promise<boolean>} 是否真的删掉了（id 不存在时说 false，让界面能说实话）
+   */
+  async function forgetEntry(id) {
+    await loadPromise;
+    if (typeof id !== 'string' || id === '') return false;
+    const before = archive.diary.length;
+    archive.diary = archive.diary.filter((e) => e?.id !== id);
+    if (archive.diary.length === before) return false;
+    // 索引是纯派生的，必须跟着重建 —— 否则"忘掉"的条目还能被召回
+    index = buildIndex(archive.diary);
+    for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
+    await persist();
+    return true;
+  }
+
   ctx.provide('feiyuMemory', {
     /**
      * 当前档案快照（只读用途）。
@@ -878,10 +904,194 @@ export function apply(ctx, rawConfig) {
       await persist();
       return true;
     },
+    /**
+     * 忘掉某一条日记 —— 面板上那个「忘掉」按钮。
+     *
+     * 这一条是这个插件**必须要有的**：在那之前，想删一条记忆得自己去编辑
+     * 日记的 jsonl 文件。会做这件事的人不需要面板，需要面板的人不会做这件事。
+     *
+     * 返回是否真的删掉了（id 不存在时返回 false，让界面能说实话）。
+     */
+    forget: forgetEntry,
     /** 供将来的客户端面板用 */
     listDiary(limit = 50) {
       return archive.diary.slice(-limit).reverse();
     },
+  });
+
+  /* ── 客户端面板的数据通道 ── */
+
+  /**
+   * 面板要显示日记，就得让浏览器拿到主机上的档案。
+   *
+   * 【为什么走 HTTP，而不是 Cordis RPC】
+   * 这是端到端侦察换来的结论，别推翻它：
+   *
+   *  1. 已安装的客户端插件**没有"自己的 host RPC"**。那个
+   *     `host.call(method, args)` 只对「动态包」开放 —— 即
+   *     `dsh-tool-cordis` 现场写、用户当场批准运行的那种临时插件。
+   *  2. Typert Remote（`@Remote`）那套是**构建期固定**的第一方能力。
+   *     官方文档原话：「Client 不会在运行时发现 Host 中已启用的服务或
+   *     Remote 定义 … 若要增加能力，必须显式导入相应的 `/remote` 值并
+   *     在此组合中挂载」。第三方插件加不进去。
+   *  3. 但 host 半边能注册 HTTP 路由（`ctx.webServer.register`），
+   *     而客户端本来就是个普通浏览器模块，`fetch` 是它的同源请求。
+   *
+   * 于是：host 开三个接口，客户端的 `fetch` 直接取。零依赖、零额外模块。
+   *
+   * 【权限，想清楚再改】
+   * 路由挂在应用自己的源上，**故意不设 CORS 头** —— 浏览器里别的网站
+   * `fetch` 它拿不到响应体（默认跨源策略读不到），这条是真正有意义的防护。
+   *
+   * 本机其他进程当然能 curl 它。但它们本来就能直接读
+   * `~/.dsh/feiyu-diary/` 里的明文 jsonl —— **威胁面没有变大**。
+   * 所以不要因为"怕被读"就往这里加自创的鉴权：那是假的安全感，
+   * 真正的秘密（密钥）在发给模型之前就已经被拦掉了（SPEC §6.3）。
+   */
+  const PANEL_BASE = '/feiyu-diary';
+
+  /** 面板接口统一响应头：不缓存、不嗅探类型 */
+  function panelReply(res, status, body) {
+    res.statusCode = status;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(JSON.stringify(body));
+  }
+
+  /** 读一个很小的 JSON 请求体。超过 8KB 直接拒 —— 我们只收 id */
+  async function readPanelBody(req) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 8192) throw new Error('请求体过大');
+      chunks.push(chunk);
+    }
+    if (chunks.length === 0) return {};
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
+
+  /**
+   * 面板要的那一份状态。
+   *
+   * **只挑界面用得上的字段**，不把整个档案倒出去 —— 注入用的
+   * keywords 索引之类的东西对界面没有意义，多传只是多暴露。
+   */
+  function panelState() {
+    const rel = archive.relationship ?? {};
+    const since = archive.manifest?.created_at;
+    return {
+      ok: true,
+      ready,
+      degraded,
+      count: archive.diary.length,
+      diary: archive.diary
+        .map((e) => ({
+          id: e?.id ?? '',
+          text: e?.text ?? '',
+          kind: e?.kind ?? 'chat',
+          tags: e?.tags ?? [],
+          created_at: e?.created_at ?? 0,
+          salience: e?.salience ?? 0,
+        }))
+        .reverse(),
+      traits: (rel.traits ?? [])
+        .filter((t) => t && typeof t.value === 'string')
+        .map((t) => ({
+          value: t.value,
+          evidence: typeof t.evidence === 'string' ? t.evidence : '',
+          about: t.about === 'self' ? 'self' : 'user',
+        })),
+      grievances: (rel.grievances ?? [])
+        .filter((g) => g && g.resolved !== true)
+        .map((g) => g.what),
+      facts: {
+        days: Number.isFinite(since) ? Math.max(0, Math.floor((Date.now() - since) / 86400000)) : 0,
+        nickname: typeof rel.nickname === 'string' ? rel.nickname : '',
+        lexicon: (archive.lexicon?.items ?? [])
+          .filter((i) => i && typeof i.term === 'string')
+          .sort((a, b) => (b.salience ?? 0) - (a.salience ?? 0))
+          .slice(0, 8)
+          .map((i) => i.term),
+      },
+    };
+  }
+
+  /**
+   * 注册面板路由。
+   *
+   * 用 `ctx.inject` 而不是 `ctx.get` —— webServer 是 web 组合才有的服务，
+   * headless 里根本不存在。inject 的语义正好：服务在就注册，不在就永远不注册，
+   * **不影响插件其余部分**（降级优先，SPEC §10）。
+   */
+  ctx.inject(['webServer'], (scope) => {
+    scope.effect(() => {
+      const routes = [
+        {
+          kind: 'exact',
+          path: `${PANEL_BASE}/state`,
+          handler: async (req, res) => {
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+            await loadPromise;
+            return panelReply(res, 200, panelState());
+          },
+        },
+        {
+          kind: 'exact',
+          path: `${PANEL_BASE}/forget`,
+          handler: async (req, res) => {
+            if (req.method !== 'POST') return panelReply(res, 405, { ok: false, error: 'method' });
+            try {
+              const body = await readPanelBody(req);
+              const removed = await forgetEntry(body?.id);
+              return panelReply(res, 200, { ok: true, removed, count: archive.diary.length });
+            } catch (err) {
+              return panelReply(res, 400, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
+        {
+          kind: 'exact',
+          path: `${PANEL_BASE}/export`,
+          handler: async (req, res) => {
+            if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
+            try {
+              // 等到挂起的写盘落定，导出的是**磁盘上那份**档案
+              await loadPromise;
+              await drainPromise;
+              await writeChain;
+              const bytes = packArchive(archive);
+              const name = `feiyu-diary-${new Date().toISOString().slice(0, 10)}.dshpack`;
+              res.statusCode = 200;
+              res.setHeader('Content-Type', 'application/octet-stream');
+              res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+              res.setHeader('Cache-Control', 'no-store');
+              res.end(Buffer.from(bytes));
+            } catch (err) {
+              return panelReply(res, 500, {
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
+        },
+      ];
+      const disposers = routes.map((r) => scope.webServer.register(r));
+      log(`面板接口已注册：${PANEL_BASE}/{state,forget,export}`);
+      return () => {
+        for (const d of disposers.reverse()) {
+          try {
+            d();
+          } catch {
+            // 注销失败不该影响卸载
+          }
+        }
+      };
+    }, 'feiyu: 面板数据接口');
   });
 
   log(`已加载，档案目录：${archiveDirectory}`);

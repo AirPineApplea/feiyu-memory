@@ -562,6 +562,116 @@
 
 ---
 
+## 17.7 客户端半边：侧栏一个图标（2026-10-14）
+
+这一节解决的是 §3 里悬了两天的那个问题：**"DSH 客户端有两条加载路径，没验死之前不做界面。"**
+
+验死了。结论有点绕，但每一条都对着源码核过。
+
+### 两条路，别走错
+
+DSH 的浏览器插件有**两条完全不同的加载路径**，混起来会白干：
+
+| | 动态包 | **已安装 Client 模块** |
+|---|---|---|
+| 谁在用 | `dsh-tool-cordis`，AI 现场写、用户当场批准 | 正常 `dsh plugin add` 装进来的插件 |
+| 格式 | 纯 JS **async 函数体**，直接拿 `React` / `console` / `styles` / `host` | `exports["./client"]` + `dsh.client`，由网页模块加载器装载 |
+| 生命周期 | 刷新页面就不跑了；宿主撤回即卸载 | 跟插件同生共死 |
+| 拿 host 数据 | `host.call(method, args)` —— **只有这条路有** | **没有等价物**，见下 |
+
+我一开始差点照着动态包的写法做 —— 因为在 asar 里翻到的第一个官方示例就是那个形状
+（`return { inject: ['slots'], apply(ctx) {...} }`，来自 `ui-cordis/src/client/slots.ts`）。
+分清楚之后才没白写。
+
+**"创作者 UI 插件走 Plugin Manager 的已安装 Client 模块"** —— 这句是
+`dsh-cordis-client-runner` 的 README 里写的，是这两条路的分界线。
+
+### 已安装客户端插件契约（三条，别自己发明）
+
+1. 文件必须调用 `window.__ModuleLoader__.load({ id, factory })`。
+   "执行 bundle 只注册工厂，模块副作用在物化时才跑" —— 所以整个插件体都在 factory 闭包里。
+2. `id` **必须等于包名**。浏览器模块身份就是解析出来的包名；两个来源解析到同一个包名会让组合直接失败。
+3. `factory(require)` 返回一个 Cordis 插件 `{ name, inject, apply }`。
+
+`require` 能解析的只有外壳那张**冻结的模块表**（`PLATFORM_MODULES`：React、Cordis、静态 UI 库）。
+超出基座的模块请求必须写进 `dsh.client.external`。**我们只 require `react`，所以 `external` 是空的。**
+
+`dsh.client` 的合法字段（来自 `dsh-client-modules` 的校验器）：
+`platform`（必填）、`inject`、`external`、`immediately`。
+
+### 面板的数据从哪来：HTTP，不是 RPC
+
+**这是这次侦察最值钱的结论，别推翻它。**
+
+已安装的客户端插件**没有"自己的 host RPC"**：
+
+- `host.call` 只对动态包开放（见上表）。
+- Typert Remote（`@Remote` 那套）是**构建期固定**的第一方能力。官方原话：
+  「Client 不会在运行时发现 Host 中已启用的服务或 Remote 定义 … 若要增加能力，
+  必须显式导入相应的 `/remote` 值并在此组合中挂载」。第三方插件加不进去。
+
+但 host 半边能注册 HTTP 路由：
+
+```js
+ctx.inject(['webServer'], (scope) => scope.webServer.register({ kind: 'exact', path, handler }))
+```
+
+而客户端本来就是个普通浏览器模块，`fetch` 是它的**同源**请求。于是三个接口：
+
+| 路由 | 干什么 |
+|---|---|
+| `GET /feiyu-diary/state` | 面板要的那份状态（只挑界面用得上的字段） |
+| `POST /feiyu-diary/forget` | 忘掉一条 |
+| `GET /feiyu-diary/export` | 下载 `.dshpack` |
+
+用 `ctx.inject` 而不是 `ctx.get` —— webServer 是 web 组合才有的服务，
+headless 里根本不存在。inject 的语义正好：服务在就注册，不在就永远不注册，**不影响插件其余部分**。
+
+### 权限：故意不设 CORS 头
+
+路由挂在应用自己的源上。**不加 `Access-Control-Allow-Origin`** ——
+这样浏览器里别的网站 `fetch` 它拿不到响应体（默认跨源策略读不到）。
+**这一条是真正有意义的防护，有测试盯着（`panel: 响应不带 CORS 头`）。**
+
+本机其他进程当然能 curl 它。但它们本来就能直接读 `~/.dsh/feiyu-diary/` 里的明文
+jsonl —— **威胁面没有变大**。所以不要因为"怕被读"就往这里加自创的鉴权：
+那是假的安全感，真正的秘密（密钥）在发给模型之前就已经被拦掉了（§6.3）。
+
+### 界面只有三件事：看 / 删 / 带走
+
+没有搜索、没有标签筛选、没有统计图表、没有设置项（§0.1 已经砍过）。
+
+**唯一不能省的是「删」**：在那之前，想删一条记忆得自己去编辑日记的 jsonl 文件。
+会做这件事的人不需要面板，需要面板的人不会做这件事。
+
+### 两个必须记住的注册约束
+
+| 插槽 | 约束 |
+|---|---|
+| `sidebar.panellist` | **用全新的 id**。规则原话："全新的 id 会并排新增；复用已有的 id 会让你进入那一个格子并替换掉它"。我们用 `feiyu-diary` |
+| `main` | `key` **必须与侧栏的 id 完全一致** —— 侧栏按钮就是靠这个 key 找面板的。`replaceRisk: "shadows-shipped-ui"`，注册已占据的 key 会替换那个 occupant |
+
+`order: 40` —— 排在插件市场（0）和上下文洞察（20）后面，当老三。
+
+### 顺带得到的东西
+
+**`dsh-context` 是最好的参考实现**，不是 `dsh-client-ui-schedule`：
+它是 Apache-2.0、TypeScript、真的在做 `sidebar.panellist`、有完整的 client 半边和
+`.d.ts`。这次的关键 API 形状有一半是从它编译后的 bundle 里读出来的
+（压缩成一行的 421KB，得用脚本按偏移量挖上下文，grep 对它没用）。
+
+### 参考：为什么不用 JSX、不 import UI 组件库
+
+- **不用 JSX**：没有打包器就没有 JSX 变换，全程 `React.createElement`。
+- **不 import `@deepseek-ai/dsh-client-ui-primitives`**：官方规范要求照抄 markup、
+  只用 `--dsw-alias-*` 主题 token。照做的好处很实在 —— **我们不跟任何插件共享运行时代码**，
+  别人换 React 版本、换 UI 库版本都伤不到我们。`dsh-context` 借了那个库，
+  它承担了我们不用承担的风险。
+
+代价是 hover 之类的状态做不了（内联样式没有伪类）。认了：那点视觉效果不值一个构建步骤。
+
+---
+
 ## 18. 真实 DSH 端到端验证（2026-10-12）
 
 **这一节是整份文档里最有价值的部分。** 前面 105 项测试全绿，插件在真实 DSH 里

@@ -51,7 +51,7 @@
 ## 怎么跑测试
 
 ```bash
-node --test            # 105 项，零依赖
+node --test            # 156 项，零依赖
 npm run check          # 校验 cordis.patch.yml 结构
 ```
 
@@ -60,7 +60,7 @@ Windows 上 `node` 不在 PATH 里，**双击 `selfcheck.cmd`**（它会去找 D
 
 ## ⚠️ 最重要的一条：测试全绿 ≠ 插件能用
 
-**105 项测试曾经全绿，然后在真实 DSH 里一跑，抓出 5 个致命问题。**
+**测试全绿之后在真实 DSH 里一跑，抓出 7 个致命问题。纯逻辑测试碰不到它们。**
 
 它们全都在「插件 × 运行时 × 生命周期」的交界处，纯逻辑测试永远碰不到：
 
@@ -123,8 +123,41 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | **stderr 日志会随进程一起丢** | headless 跑完任务直接退进程，stderr 缓冲区来不及刷 —— 日志代码明明写了却一片空白。`debugLog: true` 时同时落 `feiyu.debug.log` 文件才留得住 |
 | **注入"像宪法不像日记"** | `traits` 是 key-value → 天生是规格；分号串行 → 读着像条款；条款压过日记 → 我读到规格就按规格执行。修法：每条印象必须带 `evidence`（那个具体瞬间），`about` 区分"对他的印象"和"我自己的规矩"，印象只留 2 条，并新增不走相似度的「最近的事」段 |
 | **"寒暄=无信息=不值得记"是错的** | 那是**系统的标准（信息量）**，不是**鱼的标准（辨识度）**。熟悉感恰恰主要来自寒暄、试错、改口这些"低信息量"的东西。门槛因此从 0.3 降到 0.15 |
+| **客户端有两条加载路径** | 「动态包」（`dsh-tool-cordis` 现场写、用户批准的那种：纯 JS async 函数体，有 `host.call`）和「已安装 Client 模块」（`exports["./client"]` + `dsh.client`，走 `window.__ModuleLoader__.load`）。**我们走第二条，别照动态包的写法抄** —— 那样写出来的东西刷新页面就没了 |
+| **已安装的客户端插件没有自己的 host RPC** | `host.call` 只对动态包开放；Typert Remote 是**构建期固定**的第一方能力，第三方加不进去。**面板数据走 HTTP**：host 用 `ctx.webServer.register` 开路由，客户端同源 `fetch`。见 SPEC §17.7 |
+| **`__ModuleLoader__.load` 的 id 必须等于包名** | 浏览器模块身份就是解析出来的包名；两个来源解析到同一个包名会让组合**直接失败** |
+| **`main` 插槽的 key 必须等于侧栏的 id** | 侧栏按钮就是靠这个 key 找面板的。对不上就是"点了没反应" |
+| **`sidebar.panellist` 的 id 绝不能复用** | "全新的 id 会并排新增；复用已有的 id 会让你进入那一个格子**并替换掉它**"。用 `feiyu-diary`，别碰 `plugins` |
 
-## 开发时最该用的工具
+## 客户端半边（`src/client/index.js`）
+
+**手写的，没有打包器、没有任何依赖。** 改之前先读 SPEC §17.7，那里写了每条约束的出处。
+
+三条最容易踩的：
+
+1. **不能有 JSX、不能有 ESM `import`** —— 没有构建步骤就没有变换。
+2. **只能 `require('react')`**。多 require 一个模块就得写进 `dsh.client.external`，那是额外的风险面。
+3. **上色只能用 `--dsw-alias-*` 主题 token**，写死颜色会在浅色/深色切换时翻车。有测试盯着。
+
+改完怎么验：
+
+```bash
+node --test test/client.test.mjs     # 15 项，用桩 React 真跑一遍渲染
+```
+
+这一组能挡住 id 拼错、slot 名写错、require 越界、渲染崩溃 —— 这些的失效症状都是
+"图标不出现"，**没有任何报错指向这里**。但它替代不了真浏览器验证：
+
+```bash
+dsh feiyu-web --from-default-profile web --dump-config
+dsh plugin --profile feiyu-web add 'link:D:\肥鱼日记'
+# 给这个 profile 写 dataDir + debugLog，然后：
+dsh --profile feiyu-web --port 19400 --no-open
+# 它启动时会打印**带 token 的地址**，用那个地址打开（不带 token 是 401）
+```
+
+日志里看到 `面板接口已注册：/feiyu-diary/{state,forget,export}` 才算 host 侧成了。
+三件事逐个点一遍：**看**（数据出来没）、**删**（磁盘上少没少）、**带走**（导出的 zip 能不能打开）。
 
 ```bash
 node tools/preview-memory.mjs                          # 把此刻注入给模型的内容打出来
