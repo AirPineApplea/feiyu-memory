@@ -440,6 +440,47 @@ test('persona: 一点记忆都没有时，不注入声明', () => {
   assert.equal(r.text, '');
 });
 
+test('persona: **内容为空但有指针时，指针不能被吞掉**', () => {
+  // 这是真踩过的 bug：build() 里原来写的是
+  //   const middle = body === '' ? '' : `${body}${tail}`;
+  // 内容为空 → middle 空 → 那句"想留话"的指针一起没了。
+  // 187 项测试全绿也抓不到 —— 因为没人写过这个用例。
+  const r = renderMemoryBlock({
+    includePersona: false,
+    handNoteHint: '想留话就用 feiyu_note。',
+    now: NOW,
+  });
+  assert.ok(r.text.includes('feiyu_note'), `指针被吞掉了：${r.text}`);
+  assert.ok(r.text.includes('所有对话都是同一条鱼'), '声明也要在');
+});
+
+test('persona: 指针和内容并存时，两个都在，且内容在前', () => {
+  const r = renderMemoryBlock({
+    includePersona: false,
+    recent: [{ id: 'a', text: '一条日记。', created_at: NOW }],
+    handNoteHint: '想留话就用 feiyu_note。',
+    now: NOW,
+  });
+  assert.match(r.text, /一条日记/);
+  assert.ok(r.text.includes('feiyu_note'));
+  assert.ok(r.text.indexOf('一条日记') < r.text.indexOf('feiyu_note'));
+});
+
+test('persona: 预算再小也不许把指针裁掉（它是帧的一部分）', () => {
+  for (const budget of [200, 300, 600]) {
+    const r = renderMemoryBlock({
+      includePersona: false,
+      recent: [{ id: 'a', text: '很长很长的一条。'.repeat(50), created_at: NOW }],
+      handNoteHint: '想留话就用 feiyu_note。',
+      budget,
+      now: NOW,
+    });
+    if (r.text === '') continue; // 预算小到连帧都装不下，整个不注入是可以的
+    assert.ok(r.text.includes('feiyu_note'), `预算 ${budget} 时指针被裁了`);
+    assert.ok(r.tokens <= budget, `预算 ${budget} 超了：${r.tokens}`);
+  }
+});
+
 /* ── 「最近的事」：不需要相似度，永远在场 ── */
 
 test('recent: 按时间倒序，最近的在最上面', () => {

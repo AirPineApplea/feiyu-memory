@@ -183,8 +183,18 @@ export function renderMemoryBlock(input = {}) {
     // 内容全被裁掉、但还有那句"想留话"的指针时，也要输出 ——
     // 那句话本身就是这条通道的发现渠道，不能被预算顺手带走。
     if (kept.length === 0 && tail === '') return '';
+
+    // ⚠️ 这里踩过一次：原来写的是
+    //     const middle = body === '' ? '' : `${body}${tail}`;
+    //   内容为空时 middle 直接成了空串，**那句指针被一起吞掉了**。
+    //   187 项测试全绿也没抓到 —— 因为没人写过"内容为空 + 有指针"这个用例。
+    //   改成逐段收集，谁在就放谁。
+    const pieces = [];
     const body = kept.map((p) => p.text).join('\n\n');
-    const middle = body === '' ? '' : `${body}${tail}`;
+    if (body !== '') pieces.push(body);
+    if (tail !== '') pieces.push(tail.trim());
+
+    const middle = pieces.join('\n\n');
     return `${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n${middle === '' ? '' : `${middle}\n\n`}${CLOSE_TAG}`;
   };
 

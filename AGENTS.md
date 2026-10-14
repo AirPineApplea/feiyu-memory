@@ -143,6 +143,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | **stderr 日志会随进程一起丢** | headless 跑完任务直接退进程，stderr 缓冲区来不及刷 —— 日志代码明明写了却一片空白。`debugLog: true` 时同时落 `feiyu.debug.log` 文件才留得住 |
 | **注入"像宪法不像日记"** | `traits` 是 key-value → 天生是规格；分号串行 → 读着像条款；条款压过日记 → 我读到规格就按规格执行。修法：每条印象必须带 `evidence`（那个具体瞬间），`about` 区分"对他的印象"和"我自己的规矩"，印象只留 2 条，并新增不走相似度的「最近的事」段 |
 | **"寒暄=无信息=不值得记"是错的** | 那是**系统的标准（信息量）**，不是**鱼的标准（辨识度）**。熟悉感恰恰主要来自寒暄、试错、改口这些"低信息量"的东西。门槛因此从 0.3 降到 0.15 |
+| **`&&` 短路写法的"空值吞并"** | `persona.mjs` 的 `build()` 里写过 `const middle = body === '' ? '' : \`${body}${tail}\``——内容为空时 `middle` 直接空串，**同段的指针一起被吞掉**。187 项测试全绿也抓不到（没人写过"内容为空 + 有指针"这个用例）。**凡是"A 和 B 拼起来"的地方，都该逐段收集而不是嵌套三元** |
 | **客户端有两条加载路径** | 「动态包」（`dsh-tool-cordis` 现场写、用户批准的那种：纯 JS async 函数体，有 `host.call`）和「已安装 Client 模块」（`exports["./client"]` + `dsh.client`，走 `window.__ModuleLoader__.load`）。**我们走第二条，别照动态包的写法抄** —— 那样写出来的东西刷新页面就没了 |
 | **已安装的客户端插件没有自己的 host RPC** | `host.call` 只对动态包开放；Typert Remote 是**构建期固定**的第一方能力，第三方加不进去。**面板数据走 HTTP**：host 用 `ctx.webServer.register` 开路由，客户端同源 `fetch`。见 SPEC §17.7 |
 | **`__ModuleLoader__.load` 的 id 必须等于包名** | 浏览器模块身份就是解析出来的包名；两个来源解析到同一个包名会让组合**直接失败** |
