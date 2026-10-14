@@ -21,6 +21,7 @@ import { archiveFromFiles, DIARY_DIR } from '../src/core/archive.mjs';
 import { buildIndex, selectMemories } from '../src/core/recall.mjs';
 import { renderMemoryBlock } from '../src/core/persona.mjs';
 import { resolveConfig } from '../src/core/config.mjs';
+import { selectHandNotes, HANDNOTE_FILE } from '../src/core/handnote.mjs';
 
 const argv = process.argv.slice(2);
 const queryIdx = argv.indexOf('--query');
@@ -78,12 +79,19 @@ const { chosen } = selectMemories(archive.diary, index, query, { lastShownTurn: 
 const recentCount = config.recentEntries;
 const recent = recentCount > 0 ? archive.diary.slice(-recentCount) : [];
 
+// 手记 —— 也读进来，否则预览出来的东西跟线上注入不是一回事
+// （预览的全部价值就在于"跟真的一样"）
+const notePath = path.join(dir, HANDNOTE_FILE);
+const handNotes = fs.existsSync(notePath) ? selectHandNotes(fs.readFileSync(notePath, 'utf8')) : [];
+
 const rendered = renderMemoryBlock({
   persona: archive.persona,
   relationship: { ...archive.relationship, since: archive.manifest.created_at },
   lexicon: archive.lexicon,
   recent,
   recalled: chosen,
+  handNotes,
+  handNoteHint: '想给后面的我留话，用 feiyu_note 工具说一声就行 —— 不用管格式，也别为了记事去动文件。',
   includePersona: config.includePersona,
   budget: config.budgetTokens,
   now: Date.now(),

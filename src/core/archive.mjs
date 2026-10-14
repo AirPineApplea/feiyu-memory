@@ -262,7 +262,10 @@ export function archiveFromFiles(entries, options = {}) {
 
 /** 把一条日记规整成合法形状，缺字段补默认值 */
 export function normalizeDiaryEntry(raw) {
-  const KINDS = new Set(['failure', 'win', 'chat', 'disclosure', 'grievance']);
+  // 'note' = **哪个肥鱼自己主动留下的**，不是固化模型生成的那种。
+  // 未知 kind 会退化成 'chat'，所以加一个新值不会让老档案读不了 ——
+  // 不需要 schema 版本迁移。
+  const KINDS = new Set(['failure', 'win', 'chat', 'disclosure', 'grievance', 'note']);
   return {
     id: String(raw.id),
     date: typeof raw.date === 'string' ? raw.date : new Date(Number(raw.created_at) || Date.now()).toISOString().slice(0, 10),

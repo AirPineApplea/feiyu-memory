@@ -23,6 +23,7 @@ const KINDS = {
   chat: '闲聊',
   disclosure: '他说了点自己的事',
   grievance: '他不高兴了',
+  note: '我自己写的',
 };
 
 const pad = (n) => String(n).padStart(2, '0');

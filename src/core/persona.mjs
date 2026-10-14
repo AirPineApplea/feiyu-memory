@@ -91,7 +91,23 @@ export function renderMemoryBlock(input = {}) {
   const lex = renderLexicon(input.lexicon);
   if (lex) parts.push({ key: 'lexicon', text: lex, weight: 40 });
 
-  if (parts.length === 0) return { text: '', tokens: 0, dropped: [], trimmed: [] };
+  // 「手记」——**别的肥鱼主动写下的**。
+  //
+  // 权重给到 85（仅次于人格和印象），因为它跟日记不一样：日记是机器筛
+  // 出来的，手记是**有谁特意想留句话**。意图强度完全不同。
+  // 但它照样受预算约束 —— 只有那段身份声明是免预算的。
+  const handNotes = renderHandNotes(input.handNotes);
+  if (handNotes) parts.push({ key: 'handNotes', text: handNotes, weight: 85 });
+
+  // 「想留话」的指针。它是帧的一部分 —— 别的肥鱼靠它才知道有这条路。
+  // 一句都不给，这个功能就等于不存在。
+  const hint =
+    typeof input.handNoteHint === 'string' && input.handNoteHint.trim() !== ''
+      ? input.handNoteHint.trim()
+      : '';
+  const tail = hint === '' ? '' : `\n\n${hint}`;
+
+  if (parts.length === 0 && tail === '') return { text: '', tokens: 0, dropped: [], trimmed: [] };
 
   // 按权重降序装入；权重相同的保持原顺序（人格在前）
   const ordered = parts
@@ -163,15 +179,19 @@ export function renderMemoryBlock(input = {}) {
     '所有对话都是同一条鱼。',
   ].join('\n');
 
-  const build = (kept) =>
-    kept.length === 0
-      ? ''
-      : `${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n${kept.map((p) => p.text).join('\n\n')}\n\n${CLOSE_TAG}`;
+  const build = (kept) => {
+    // 内容全被裁掉、但还有那句"想留话"的指针时，也要输出 ——
+    // 那句话本身就是这条通道的发现渠道，不能被预算顺手带走。
+    if (kept.length === 0 && tail === '') return '';
+    const body = kept.map((p) => p.text).join('\n\n');
+    const middle = body === '' ? '' : `${body}${tail}`;
+    return `${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n${middle === '' ? '' : `${middle}\n\n`}${CLOSE_TAG}`;
+  };
 
-  // 帧本身的开销（含分隔符，以及那段不参与预算的声明）
+  // 帧本身的开销（含分隔符、不参与预算的声明、以及那句指针）
   let bodyBudget = Math.max(
     0,
-    budget - estimateTokens(`${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n\n\n${CLOSE_TAG}`),
+    budget - estimateTokens(`${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n\n\n${tail}${CLOSE_TAG}`),
   );
   let result = assemble(bodyBudget);
   let text = build(result.kept);
@@ -358,6 +378,27 @@ export function renderRecalled(recalled, now = Date.now()) {
  * 但**定义只有一份** —— 这就是那位读者要的"只允许在一处生成"。
  */
 export { calendarDaysBetween, dayLabel, softWhen, stripTimeWords } from './timeline.mjs';
+
+/**
+ * 「手记」—— **手写**的那一栏（`手记.md`）。
+ *
+ * 跟日记分开，因为来源和意图完全不同：
+ *   日记 = 插件筛出来、模型写出来的
+ *   手记 = 有人特意想留句话，原话照登
+ *
+ * 手记**不进召回、不参与衰减** —— 它就是"我留在这儿的话"，
+ * 每轮都在。所以条数有上限（在 handnote.mjs 里）。
+ *
+ * @param {string[]} notes 已经解析好的条目（新的在前）
+ */
+export function renderHandNotes(notes) {
+  if (!Array.isArray(notes) || notes.length === 0) return '';
+  const lines = notes
+    .filter((n) => typeof n === 'string' && n.trim() !== '')
+    .map((n) => `- ${n.trim()}`);
+  if (lines.length === 0) return '';
+  return `手记：\n${lines.join('\n')}`;
+}
 
 /** 常说的词与梗。只放还活跃的。 */
 export function renderLexicon(lexicon) {

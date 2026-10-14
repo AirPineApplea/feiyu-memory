@@ -53,6 +53,18 @@
     **第二句（"每一个写它的你，都不记得写它的那一刻"）是防撞层，不能省** ——
     没有它，读者会拿"我记不记得"去检验，第一次撞见对不上就整体不信了。
    它是给人看的窗口；真相源永远是 `diary/*.jsonl`。
+11. **主动记一条走工具，绝不走文件。** `feiyu_note`（`tools.register`）是
+    「哪一棒想到了什么，自己说一声就记下」的唯一通道。
+    **绝不要改成"让 AI 直接往 `diary/*.jsonl` 追加"** —— 那条路有两个洞：
+    `archiveToFiles()` 是**整份重建**，内存副本会把外部追加的行静默盖掉；
+    而漏写 `id` 会变成字符串 `"undefined"`，两条日记撞成同一个 id。
+12. **工具的 `parameters` 手写 JSON Schema。** 我们不能 import
+    `@deepseek-ai/dsh-tools`（零依赖铁律），所以 `defineTool` 那层转换得自己产出：
+    `{ type:'object', properties:{...}, required:[...] }`。
+    `output.render(args, value)` 返回 `[{ type:'text', text:'...' }]`。
+13. **`手记.md` 是只读的。** 插件只解析它、永不写它 —— 这是它天然没有竞态的
+    原因。解析器会**跳过代码围栏**：模板里用 `- ` 写说明会被当成手记读进去
+    （真踩过，`preview-memory` 抓到的）。
    双写两个真相源 = bug 工厂（索引落盘那件事已经踩过一次）。
    它不进 `.dshpack`，写失败只 warn，改它等于白改。
 

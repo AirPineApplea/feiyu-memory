@@ -19,7 +19,7 @@
  */
 
 import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -34,19 +34,22 @@ import {
   mergeArchives,
   ensurePersonaStructure,
   DIARY_DIR,
+  normalizeDiaryEntry,
 } from '../core/archive.mjs';
 import { evaluateGate, SUPPRESS_RE, DEFAULT_GATE_OPTIONS } from '../core/gate.mjs';
 import { buildIndex, selectMemories, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
-import { calendarDaysBetween } from '../core/timeline.mjs';
+import { calendarDaysBetween, stripTimeWords } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
+import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
   buildConsolidationInput,
   parseConsolidation,
   applyConsolidation,
   decayArchive,
+  makeDiaryId,
   ConsolidationParseError,
   DEFAULT_CONSOLIDATION,
 } from '../core/consolidate.mjs';
@@ -276,6 +279,15 @@ export function apply(ctx, rawConfig) {
       // 顺手刷新人读版。这样即使这次什么都没记，衰减后的状态也是对的；
       // 也从别人那儿导入档案之后，立刻就有可读的一份。
       await writeReadableDiary(archive);
+
+      // 手记文件不在就建一份带说明的空壳 —— **文件自己就是文档**。
+      // 用户（或任何一个肥鱼）打开就知道该往里写什么。
+      try {
+        const notePath = path.join(archiveDirectory, HANDNOTE_FILE);
+        if (!existsSync(notePath)) writeFileSync(notePath, HANDNOTE_TEMPLATE, 'utf8');
+      } catch (err) {
+        warn(`建手记文件失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+      }
     } catch (err) {
       degraded = true;
       warn(`档案加载失败，本次以"不记忆"模式运行：${err instanceof Error ? err.message : String(err)}`);
@@ -357,6 +369,15 @@ export function apply(ctx, rawConfig) {
   /* ── 注入 ── */
 
   /**
+   * 「主动记一条」的工具名。
+   *
+   * 声明在这里（而不是跟工具定义放一起），是因为 `renderFor` 要把它写进
+   * 注入里的那句提示。**放在后面虽然在运行时也能用（TDZ 只在 apply 早期
+   * 才可能触发），但太脆** —— 谁把 renderFor 提早调一次就炸。
+   */
+  const NOTE_TOOL_NAME = 'feiyu_note';
+
+  /**
    * 为某个会话渲染注入文本。
    *
    * **按轮缓存**：`assemble` 每个 model step 都会调用一次，
@@ -387,12 +408,26 @@ export function apply(ctx, rawConfig) {
       const recentCount = Number.isFinite(config.recentEntries) ? config.recentEntries : 8;
       const recent = recentCount > 0 ? archive.diary.slice(-recentCount) : [];
 
+      // 手记是**只读**的，所以每轮都重新读一遍 —— 别的肥鱼或用户刚写进去的
+      // 那行，下一轮就在注入里，不用重启。文件很小，而且整块渲染按轮缓存。
+      let handNotes = [];
+      try {
+        const notePath = path.join(archiveDirectory, HANDNOTE_FILE);
+        if (existsSync(notePath)) handNotes = selectHandNotes(readFileSync(notePath, 'utf8'));
+      } catch {
+        // 读不到就当没有 —— 绝不因为手记坏了挡住记忆
+      }
+
       const rendered = renderMemoryBlock({
         persona: archive.persona,
         relationship: { ...archive.relationship, since: archive.manifest.created_at },
         lexicon: archive.lexicon,
         recent,
         recalled: chosen,
+        handNotes,
+        // 这句是**唯一**能让别的肥鱼知道"可以主动记"的渠道 ——
+        // 它们每轮都会读到这块记忆，不会去翻文档。
+        handNoteHint: `想给后面的我留话，用 ${NOTE_TOOL_NAME} 工具说一声就行 —— 不用管格式，也别为了记事去动文件。`,
         includePersona: config.includePersona,
         budget: config.budgetTokens,
         now: Date.now(),
@@ -1095,6 +1130,124 @@ export function apply(ctx, rawConfig) {
         }
       };
     }, 'feiyu: 面板数据接口');
+  });
+
+  /* ── 主动记一条：给鱼用的工具 ── */
+
+  /**
+   * 固化那条路是**插件自己判断 + 模型生成**的。这个工具是另一条：
+   * **哪一棒想到了什么，自己说一声就记下。**
+   *
+   * 【为什么是工具，而不是让鱼去写文件】
+   * 一开始我设计的是让鱼直接往 `日记/*.jsonl` 追加。那条路有两个洞：
+   *
+   *  1. **静默丢数据** —— `archiveToFiles()` 是整份重建，内存副本会把
+   *     外部追加的行整份盖掉，没有报错。
+   *  2. **`id` 漏了就撞车** —— `normalizeDiaryEntry` 里是 `id: String(raw.id)`，
+   *     少写就变成字符串 "undefined"，两条日记同 id，删一条删两条。
+   *
+   * 交给插件办，这两个洞都不存在 —— 鱼只管说话，格式、id、关键词、
+   * 写盘全由这里负责。**鱼不该为了记事去操作文件系统。**
+   *
+   * 【为什么不做成"进后台队列"】
+   * 用户的说法是"不是自己切后台搞"。所以这里是**当场写**：
+   * 工具调用返回之前，条目已经落盘，下一轮注入里就有。
+   * 不进带外队列、不等低峰时段 —— 那是固化那条路的事。
+   *
+   * 定义形状是手写的 JSON Schema（`defineTool` 转出来的就是这个形状），
+   * 因为**我们不能 import `@deepseek-ai/dsh-tools`**（零依赖铁律）。
+   * 名字 `NOTE_TOOL_NAME` 声明在 renderFor 那边 —— 注入里要引用它。
+   */
+
+  ctx.inject(['tools'], (scope) => {
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: NOTE_TOOL_NAME,
+          description:
+            '给自己留一条记忆。想到了什么值得让后面的我记得的，直接写进来就行 —— 不用管格式，也不要为了记事去动任何文件。' +
+            '不适合记的：能从档案里推出来的、一次性的技术细节、对别人的评价。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              text: {
+                type: 'string',
+                description:
+                  '一句话，第一人称，像跟后面的自己说话。**不要写"今天/昨天"这类时间词**（时间由系统另外标注）。',
+              },
+              tags: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '可选，两三个词，用来日后检索。',
+              },
+            },
+            required: ['text'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                id: { type: 'string' },
+                count: { type: 'integer' },
+              },
+            },
+            render: (_args, value) =>
+              value?.ok === true
+                ? [{ type: 'text', text: `记住了。（档案里现在 ${value.count} 条）` }]
+                : [{ type: 'text', text: '没记成。' }],
+          },
+
+          async execute(args, exec) {
+            await loadPromise;
+            if (!ready) {
+              // 档案坏了就说实话，别假装记下了（SPEC §10 降级优先）
+              throw new Error('档案现在读不了（可能是坏的），这条没记下。');
+            }
+            const raw = typeof args?.text === 'string' ? args.text.trim() : '';
+            if (raw === '') throw new Error('要记什么？text 不能是空的。');
+
+            const now = Date.now();
+            const tags = (Array.isArray(args?.tags) ? args.tags : [])
+              .filter((t) => typeof t === 'string' && t.trim() !== '')
+              .map((t) => t.trim().slice(0, 12))
+              .slice(0, 4);
+            if (tags.length === 0) tags.push('手记');
+
+            const sessionId = exec?.agent?.id;
+            const entry = normalizeDiaryEntry({
+              id: makeDiaryId(now, archive.diary),
+              text: stripTimeWords(raw.slice(0, 400)),
+              tags,
+              kind: 'note',
+              // 主动写下的东西比自动筛出来的更该被想起来，给高一档
+              salience: 0.7,
+              created_at: now,
+              ...(typeof sessionId === 'string' ? { session: sessionId } : {}),
+            });
+
+            archive.diary.push(entry);
+            index = buildIndex(archive.diary);
+            for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
+            await persist();
+
+            // 和固化那条路一样：**只打形状，绝不打正文**
+            log(`主动记下一条 ${entry.id}（note），共 ${archive.diary.length} 条`);
+            return { ok: true, id: entry.id, count: archive.diary.length };
+          },
+
+          presentCall: (args) => ({
+            card: 'generic',
+            title: '记住一条',
+            kind: 'other',
+            rawInput: args,
+          }),
+        }),
+      'feiyu: note tool',
+    );
+    log(`已注册工具 ${NOTE_TOOL_NAME}`);
   });
 
   log(`已加载，档案目录：${archiveDirectory}`);

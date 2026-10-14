@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -18,6 +19,12 @@ const NOW = Date.now();
 
 /** 用例的数据目录约定：临时根目录下的 feiyu-diary */
 const dataDirFor = (home) => path.join(home, 'feiyu-diary');
+
+/** 当月日记文件名（写盘按本地月份分片） */
+const monthFile = (now = Date.now()) => {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}.jsonl`;
+};
 
 const GOOD_REPLY = JSON.stringify({
   skip: false,
@@ -63,6 +70,19 @@ function makeHarness(reply = GOOD_REPLY) {
     },
   };
 
+  /**
+   * 假的 tools 服务 —— 记录注册的工具，测试可以直接调 `execute`。
+   * 同样让每个 host 测试都跑一遍工具注册。
+   */
+  const tools = new Map();
+  const toolsService = {
+    register(def) {
+      if (tools.has(def.name)) throw new Error(`tool 重复注册：${def.name}`);
+      tools.set(def.name, def);
+      return () => tools.delete(def.name);
+    },
+  };
+
   const llm = {
     stream(opts) {
       streamCalls += 1;
@@ -80,6 +100,7 @@ function makeHarness(reply = GOOD_REPLY) {
     get(n) {
       if (n === 'llm') return llm;
       if (n === 'webServer') return webServer;
+      if (n === 'tools') return toolsService;
       if (n === 'agentDefaultModel') {
         return {
           currentSelection: () => ({
@@ -158,6 +179,7 @@ function makeHarness(reply = GOOD_REPLY) {
     provided,
     disposers,
     routes,
+    tools,
     /** 驱动一条已注册的面板路由，模拟一次 HTTP 请求 */
     async callRoute(routePath, { method = 'GET', body } = {}) {
       const route = [...routes.values()].find((r) => r.path === routePath);
@@ -796,5 +818,186 @@ test('panel: 没有 webServer 服务时安静跳过，不影响插件其余部�
     const svc = h.provided.get('feiyuMemory');
     assert.ok(svc, 'feiyuMemory 服务必须还在');
     assert.equal((await svc.snapshot()).ready, true);
+  });
+});
+
+/* ─────────────── 主动记一条：给鱼用的工具 ─────────────── */
+
+/**
+ * 这里测的是"**哪一棒想到了什么，自己说一声就记下**"这条路。
+ *
+ * 它跟固化那条路的区别：固化是插件判断 + 模型生成；这个是**鱼主动发起**。
+ * 用户的原话是"不是自己切后台搞" —— 所以必须**当场落盘**，
+ * 工具返回之前条目就该在档案里。
+ */
+
+const callNote = (h, args, agentId = 's_test') =>
+  h.tools.get('feiyu_note').execute(args, {
+    agent: agentId === null ? undefined : { id: agentId },
+    signal: new AbortController().signal,
+  });
+
+test('note: 工具注册上了，且描述里说清了"不要动文件"', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    const tool = h.tools.get('feiyu_note');
+    assert.ok(tool, 'feiyu_note 必须注册');
+    assert.match(tool.description, /不要为了记事去动任何文件/);
+    // 参数 schema 要是**标准 JSON Schema** —— 我们不能 import defineTool，
+    // 得自己产出它转出来的那个形状
+    assert.equal(tool.parameters.type, 'object');
+    assert.deepEqual(tool.parameters.required, ['text']);
+    assert.equal(tool.parameters.properties.text.type, 'string');
+    // output.render 返回 ContentBlock[]
+    const blocks = tool.output.render({}, { ok: true, count: 3 });
+    assert.deepEqual(blocks, [{ type: 'text', text: '记住了。（档案里现在 3 条）' }]);
+  });
+});
+
+test('note: 说一声就当场落盘 —— 不进后台队列', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    const svc = h.provided.get('feiyuMemory');
+    await svc.snapshot();
+
+    const r = await callNote(h, { text: '我决定不再把"记不清"说成"忘了"。' });
+    assert.equal(r.ok, true);
+    assert.equal(r.count, 1);
+
+    // 关键：**工具返回的时候，磁盘上就得已经有了**
+    const raw = await readFile(path.join(dataDirFor(home), 'diary', monthFile()), 'utf8');
+    assert.match(raw, /记不清/);
+    assert.match(raw, /"kind":"note"/);
+  });
+});
+
+test('note: 正文里的时间词会被摘掉（跟日记一个规矩）', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await callNote(h, { text: '今天我想明白一件事：他其实不在乎我记不记得。' });
+    const svc = h.provided.get('feiyuMemory');
+    const snap = await svc.snapshot();
+    assert.ok(!snap.diary[0].text.startsWith('今天'), snap.diary[0].text);
+    assert.match(snap.diary[0].text, /^我想明白一件事/);
+  });
+});
+
+test('note: 空正文会被拒，不会记进一条空壳', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await assert.rejects(() => callNote(h, { text: '   ' }), /不能是空的/);
+    await assert.rejects(() => callNote(h, {}), /不能是空的/);
+    assert.equal((await h.provided.get('feiyuMemory').snapshot()).diaryCount, 0);
+  });
+});
+
+test('note: 记下的东西当场就能被召回（索引重建了）', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await callNote(h, { text: '他说过最烦我上来就动手，先问再写。' });
+
+    const agent = h.makeAgent('s_later');
+    h.emit('agent/created', { agent });
+    h.emit('session/event', { id: 's_later' }, userEvent('我记得你答应过先问再写？', 1));
+    const injected = agent.sections[0].text();
+    assert.match(injected, /先问|动手/, `主动记的条目应该能被想起来：${injected}`);
+  });
+});
+
+test('note: 没给 tags 时兜底成"手记"，给了就用给的', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await callNote(h, { text: '第一条。' });
+    await callNote(h, { text: '第二条。', tags: ['自言自语', '约定'] });
+    const snap = await h.provided.get('feiyuMemory').snapshot();
+    assert.deepEqual(snap.diary[0].tags, ['手记']);
+    assert.deepEqual(snap.diary[1].tags, ['自言自语', '约定']);
+  });
+});
+
+test('note: 每条 id 都不一样（漏 id 会撞车，那是 jsonl 手写的老坑）', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await callNote(h, { text: '第一条。' });
+    await callNote(h, { text: '第二条。' });
+    await callNote(h, { text: '第三条。' });
+    const snap = await h.provided.get('feiyuMemory').snapshot();
+    const ids = snap.diary.map((e) => e.id);
+    assert.equal(new Set(ids).size, 3, `id 撞车了：${ids.join(', ')}`);
+    assert.ok(ids.every((id) => id.startsWith('d_')), ids.join(', '));
+  });
+});
+
+test('note: 没有 tools 服务时安静跳过，记忆本身照常可用', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    const orig = h.ctx.get;
+    h.ctx.get = (n) => (n === 'tools' ? undefined : orig(n));
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    assert.equal(h.tools.size, 0, '没有 tools 服务就不该注册工具');
+    const svc = h.provided.get('feiyuMemory');
+    assert.ok(svc, '但记忆服务必须照常可用');
+    assert.equal((await svc.snapshot()).ready, true);
+  });
+});
+
+/* ─────────────── 手记（手写的那个文件） ─────────────── */
+
+test('handnote: 首次运行会建一份带说明的手记文件', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const notePath = path.join(dataDirFor(home), '手记.md');
+    assert.ok(existsSync(notePath), '手记文件该被建出来');
+    const text = await readFile(notePath, 'utf8');
+    assert.match(text, /一行一条/, '**文件自己就是文档** —— 打开就知道怎么写');
+    assert.match(text, /永远不会覆盖或清空它/, '要讲清它是只读的，别人才敢写');
+  });
+});
+
+test('handnote: 用户写进去的原话，下一轮就出现在注入里', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const notePath = path.join(dataDirFor(home), '手记.md');
+    await writeFile(
+      notePath,
+      '# 手记\n\n- 别把"记不清"说成"忘了"。\n- 他讨厌我上来就动手。\n',
+      'utf8',
+    );
+
+    const agent = h.makeAgent('s_note');
+    h.emit('agent/created', { agent });
+    h.emit('session/event', { id: 's_note' }, userEvent('随便说点什么', 1));
+    const injected = agent.sections[0].text();
+    assert.match(injected, /手记：/, injected);
+    assert.match(injected, /别把"记不清"说成"忘了"/);
+    assert.match(injected, /他讨厌我上来就动手/);
+  });
+});
+
+test('handnote: 注入里带着"可以主动记"的指针 —— 这是唯一的发现渠道', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const agent = h.makeAgent('s_hint');
+    h.emit('agent/created', { agent });
+    h.emit('session/event', { id: 's_hint' }, userEvent('你好', 1));
+    const injected = agent.sections[0].text();
+    assert.match(injected, /feiyu_note/, '不写这句，别的肥鱼根本不知道这条路存在');
+    assert.match(injected, /别为了记事去动文件/);
   });
 });
