@@ -432,13 +432,40 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 ## 开发
 
 ```bash
-node --test            # 132 项测试，零依赖
+node --test            # 218 项测试，零依赖
 npm run check          # 校验 cordis.patch.yml 结构
+npm run doctor         # 发版前体检
+npm run preview        # 把此刻注入给模型的内容打出来
 ```
 
 Windows 上 `node` 通常不在 PATH 里，**双击 `selfcheck.cmd` 即可** ——
-它会自己去找 DeepSeek Harness 自带的那份 node，跑完测试和配置检查。
+它会自己去找 DeepSeek Harness 自带的那份 node，把上面三样跑一遍。
 （那个脚本刻意写成纯 ASCII：cmd.exe 用 GBK 读批处理文件，UTF-8 中文会把语法搞坏。）
+
+### `npm run doctor` —— 发版前的体检
+
+它跟"跑测试"不是一回事。测试回答"代码对不对"，doctor 回答
+**"现在这个状态能不能发出去"**，多查四类：
+
+| 类 | 查什么 |
+|---|---|
+| 发布就绪 | 零运行时依赖、没有安装期脚本、`exports["./client"]`、`dsh.client.platform`、LICENSE |
+| **文档一致性** | **把文档里的数字当断言验** —— 测试数、默认预算跟实际对不对得上 |
+| 档案健康 | jsonl 能不能解析、**manifest 计数骗不骗人**（对不上 = 丢过写入）、id 有没有撞车 |
+| 仓库卫生 | 工作区干不干净、有没有误提交的垃圾（`.refs`、`*.bak-*`、临时脚本） |
+
+**"文档一致性"那一类是为了一个具体的坑：**
+
+> 改完代码要回头对文档 —— **冻结标记指错方向比没标记更糟。**
+>
+> 踩过：改了默认预算却只 grep 了 README，漏了 AGENTS.md 和 SPEC.md 里那几处旧数，
+> SPEC 里那块 ❄️ 还指着过期的值。
+
+规矩是：**讲历史的那一行必须带时间词**（当时/曾经/那时/当年），
+否则一律当成"当前值"来验。这样旧数可以留着（它是事实，改了就是篡改历史），
+但读者分不出哪句是当前值这件事被消掉了。
+
+改动记录在 [CHANGELOG.md](CHANGELOG.md)。
 
 测试覆盖三层：纯逻辑单测（档案往返 / 隐私 / 关键词 / 召回 / 闸门 / 固化 / 配置），
 以及一组**用假 ctx 跑通整个插件的接线冒烟测试** ——

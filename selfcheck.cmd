@@ -50,10 +50,21 @@ set "RC=%ERRORLEVEL%"
 
 echo.
 echo ============================================================
-echo   2/2  checking cordis.patch.yml
+echo   2/3  checking cordis.patch.yml
 echo ============================================================
 "%NODE%" tools\check-patch-yaml.mjs
 if errorlevel 2 echo   (js-yaml not found, skipping. This check only; the plugin is unaffected.)
+
+echo.
+echo ============================================================
+echo   3/3  doctor  (release readiness)
+echo ============================================================
+rem  doctor.mjs prints UTF-8 Chinese. Without this the console
+rem  decodes it as GBK and it comes out as mojibake.
+chcp 65001 >nul
+"%NODE%" tools\doctor.mjs --quick
+set "DRC=%ERRORLEVEL%"
+chcp 936 >nul
 
 echo.
 if "%RC%"=="0" (
@@ -61,5 +72,6 @@ if "%RC%"=="0" (
 ) else (
   echo   [x] some tests failed. Scroll up for the lines marked with x.
 )
+if not "%DRC%"=="0" echo   [x] doctor found problems (see the red lines above).
 echo.
 pause
