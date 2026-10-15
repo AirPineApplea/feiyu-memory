@@ -1024,3 +1024,73 @@ test('handnote: 注入里带着"可以主动记"的指针 —— 这是唯一的
     assert.match(injected, /别为了记事去动文件/);
   });
 });
+
+/* ─────────────── persona.md 真的能改吗 ─────────────── */
+
+/**
+ * `persona.default.md` 里明写着：
+ *   *"用户可以直接改这个文件（改的是自己的档案，不是仓库里的这份默认值）"*
+ *
+ * **而这句话在这之前是假的。** 插件启动后再也不读 `persona.md`，
+ * 落盘时拿内存里那份整份写回，`mergeArchives` 里还写死 `persona: base.persona` ——
+ * 人改完，插件下一次写日记就把它悄悄覆盖回去。
+ *
+ * 一个承诺了可编辑、实际改不了的文件。
+ */
+const MARKER = '- 该皮的时候皮，他先开玩笑我接得住。';
+
+test('persona: 手动改 persona.md，**下一轮就生效**（不用重启）', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const file = path.join(dataDirFor(home), 'persona.md');
+    const text = await readFile(file, 'utf8');
+    await writeFile(file, text.replace('## 说话方式', `## 说话方式\n\n${MARKER}`), 'utf8');
+
+    const agent = h.makeAgent('s_edit');
+    h.emit('agent/created', { agent });
+    h.emit('session/event', { id: 's_edit' }, userEvent('你好', 1));
+    const injected = agent.sections[0].text();
+    assert.match(injected, /该皮的时候皮/, `改动没生效：${injected.slice(0, 200)}`);
+  });
+});
+
+test('persona: 手动改完之后**落盘不会把它覆盖掉**', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const file = path.join(dataDirFor(home), 'persona.md');
+    const text = await readFile(file, 'utf8');
+    await writeFile(file, text.replace('## 说话方式', `## 说话方式\n\n${MARKER}`), 'utf8');
+
+    // 写一条日记 —— 这必然触发一次 persist（也就是整份重写）
+    await callNote(h, { text: '随便记一条，只为了触发落盘。' });
+
+    const after = await readFile(file, 'utf8');
+    assert.match(after, /该皮的时候皮/, '**人的改动被覆盖了** —— 这个文件就白说可编辑了');
+  });
+});
+
+test('persona: 没人改的时候，落盘也不会把内存那份丢掉', async () => {
+  // 反向保护：磁盘=基线时（没人动过），必须用内存的。
+  // 焚毁就是把内存人格换成出厂默认 —— 那时候绝不能因为"磁盘跟基线一样"
+  // 就把焚毁结果又换回旧的。
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    const svc = h.provided.get('feiyuMemory');
+    await svc.snapshot();
+
+    const before = await readFile(path.join(dataDirFor(home), 'persona.md'), 'utf8');
+    assert.match(before, /feiyu:anchor:begin/);
+
+    await svc.burn();
+    const after = await readFile(path.join(dataDirFor(home), 'persona.md'), 'utf8');
+    assert.match(after, /feiyu:anchor:begin/, '焚毁后人格结构还该在');
+    assert.ok((await svc.snapshot()).diaryCount === 0, '焚毁该清掉日记');
+  });
+});

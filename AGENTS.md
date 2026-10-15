@@ -165,6 +165,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 | 删日记时不立墓碑 | 落盘前会读一遍磁盘，刚删的会被判成"别人刚加的"捞回来。「忘掉」和「焚毁」当场失效 |
 | 给一段记忆调高权重 | 权重管的是"预算不够先牺牲谁"，**管不了"某段自己涨到把预算吃光"**。「我自己想的」95 > 「最近的事」80 → 判断永远不砍、被砍的是日记。**每段都必须有上限，而且按高频设**。见 SPEC §17.13 |
 | 按"刚做完时"的规模定上限 | `MAX_NOTES` 原来写 8，是按"判断很稀疏"定的。写到 14 条时它吃掉 55% 预算，把日记段挤到 0% |
+| 以为 `persona.md` 改了就能生效 | 它**明说让人改**，但插件启动后再不读它、落盘时拿内存那份整份写回、`mergeArchives` 里写死 `persona: base.persona` —— **人改完就被悄悄覆盖**。现在有基线比对：磁盘变了就认磁盘。见 SPEC §17.14 |
 | 照"动态包"的写法写客户端 | DSH 客户端有**两条加载路径**。我们走「已安装 Client 模块」：`exports["./client"]` + `window.__ModuleLoader__.load`。走错 = 刷新页面就没了。见 SPEC §17.7 |
 | 指望客户端插件有自己的 host RPC | 没有。`host.call` 只对动态包开放，Typert Remote 是构建期固定的第一方能力。**面板数据走 HTTP**（`ctx.webServer.register` + 同源 `fetch`） |
 | 改 `__ModuleLoader__.load` 的 `id` | **必须等于包名**。两个来源解析到同一个包名会让组合直接失败 |

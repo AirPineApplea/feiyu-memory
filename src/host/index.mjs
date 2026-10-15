@@ -34,6 +34,7 @@ import {
   mergeArchives,
   ensurePersonaStructure,
   DIARY_DIR,
+  PERSONA_FILE,
   normalizeDiaryEntry,
 } from '../core/archive.mjs';
 import { evaluateGate, SUPPRESS_RE, DEFAULT_GATE_OPTIONS } from '../core/gate.mjs';
@@ -185,6 +186,28 @@ export function apply(ctx, rawConfig) {
    * 详见 `mergeArchives` 的表格。
    */
   let loadedIds = new Set();
+  /**
+   * **加载时磁盘上的人格文本** —— 用来发现"人手动改了 persona.md"。
+   *
+   * ── 为什么需要它 ──
+   *
+   * `persona.md` 是**明说让人改的**（`persona.default.md` 里就写着
+   * "用户可以直接改这个文件"）。但在这之前它其实改不动：
+   *
+   *   · 插件启动后**再也不读** `persona.md`
+   *   · 落盘时 `archiveToFiles()` 拿**内存里的**那份整份写回
+   *   · `mergeArchives()` 里写死 `persona: base.persona`
+   *
+   * 于是人改完，插件下一次写日记就**把它悄悄覆盖回去** ——
+   * 一个承诺了可编辑、实际改不了的文件。
+   *
+   * 规矩跟日记那套一样：**磁盘变了就认磁盘**。
+   *   · 磁盘文本 ≠ 基线 → 有人改过 → 采纳它，并把基线推上去
+   *   · 磁盘文本 = 基线 → 没动过 → 用内存的（我们可能自己改过，比如焚毁）
+   *
+   * 赋值时机：加载完、以及每次采纳之后。
+   */
+  let personaBaseline = null;
   /** 倒排索引 —— 纯派生，每次加载档案后重建，不落盘 */
   let index = buildIndex([]);
   let ready = false;
@@ -286,6 +309,8 @@ export function apply(ctx, rawConfig) {
       index = buildIndex(archive.diary);
       // 基线只在这里定一次：之后落盘前的三路合并全靠它判断"谁删了什么"
       loadedIds = new Set(archive.diary.map((e) => e.id));
+      // 人格也留一份基线，用来发现"人手动改了 persona.md"
+      personaBaseline = archive.persona;
       ready = true;
       log(`档案就绪：${archive.diary.length} 条日记`);
 
@@ -393,6 +418,41 @@ export function apply(ctx, rawConfig) {
    * *恢复一条看得见的删错，比丢一条看不见的东西便宜。*
    * 要根治得给删除加墓碑（tombstone），那是另一个量级的改动，先记着。
    */
+  /**
+   * 磁盘上的 `persona.md` 被人改过吗？改过就采纳。
+   *
+   * 跟 `mergeDiskEntries` 是同一个道理：**磁盘是人的地盘，内存只是缓存。**
+   * 但这个比日记简单 —— 人格是一整块文本，没有 id 可以按条合并，
+   * 所以判据只能是"跟基线比对"：变了就整块认磁盘。
+   *
+   * 两处会调它：
+   *   · `renderFor` —— 让人改完**下一轮就生效**，不用重启
+   *   · `persist`   —— 防止落盘时把人的改动覆盖掉
+   *
+   * 读不到的代价只是"这次不采纳"，绝不影响别的。
+   *
+   * @returns {boolean} 是不是采纳了磁盘上的新版本
+   */
+  function syncPersonaFromDisk() {
+    if (personaBaseline === null) return false;
+    try {
+      const file = path.join(archiveDirectory, PERSONA_FILE);
+      if (!existsSync(file)) return false;
+      const disk = readFileSync(file, 'utf8');
+      // 落盘时写的是 `ensurePersonaStructure(x) + '\n'`，比对前先把格式对齐
+      const normalized = `${ensurePersonaStructure(disk).replace(/\s*$/, '')}\n`;
+      const baseline = `${ensurePersonaStructure(personaBaseline).replace(/\s*$/, '')}\n`;
+      if (normalized === baseline) return false;
+      archive.persona = disk;
+      personaBaseline = disk;
+      log('检测到 persona.md 被手动改过，采纳磁盘上的版本');
+      return true;
+    } catch (err) {
+      warn(`读 persona.md 失败（继续用内存里的）：${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
   async function mergeDiskEntries() {
     try {
       const { files } = await readArchiveDir(archiveDirectory);
@@ -422,6 +482,8 @@ export function apply(ctx, rawConfig) {
         // ⚠️ 顺序要紧：**先并、再改时间戳、再写。**
         // 合并会把 archive 换成新对象，所以 snapshot 必须在合并之后取。
         await mergeDiskEntries();
+        // 人格也要先问一声磁盘 —— 不然人手动改的会在这里被覆盖掉
+        syncPersonaFromDisk();
         const merged = archive;
         merged.manifest.updated_at = Date.now();
         await writeArchiveDir(archiveDirectory, archiveToFiles(merged));
@@ -459,6 +521,10 @@ export function apply(ctx, rawConfig) {
     let text = '';
     try {
       const query = s.lastUserText;
+
+      // 人可能刚改过 persona.md —— 每轮问一次，**改完下一轮就生效，不用重启**。
+      // 块本身按轮缓存，所以这个读一turn一次，跟手记那条一样便宜。
+      syncPersonaFromDisk();
 
       // ── 判断和事件，分开放 ──
       //
