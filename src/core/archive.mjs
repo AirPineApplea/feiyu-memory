@@ -82,6 +82,17 @@ export function createEmptyArchive(now = Date.now(), persona = '') {
       session_count: 0,
       diary_count: 0,
       generator: 'feiyu-memory',
+      /**
+       * **墓碑**：被删掉的日记 id，只增不减。
+       *
+       * 为什么需要它：档案被很多个会话同时打开，落盘时整份重写。
+       * 落盘前的三路合并要能区分"别人刚加的"和"我们删掉的"——
+       * 光靠"加载时的基线"不够：**本会话自己新增、又自己删掉的条目
+       * 不在基线里**，会被当成"别人刚加的"捞回来（`burn()` 就是这么坏的）。
+       *
+       * 所以删除必须留个记号。老档案没有这个字段 → 当空数组处理。
+       */
+      deleted_ids: /** @type {string[]} */ ([]),
     },
     persona: ensurePersonaStructure(persona),
     relationship: {
@@ -250,6 +261,11 @@ export function archiveFromFiles(entries, options = {}) {
         session_count: Number(manifest.session_count) || 0,
         diary_count: diary.length,
         generator: typeof manifest.generator === 'string' ? manifest.generator : 'feiyu-memory',
+        // 墓碑必须活过一轮读写 —— 它靠的就是"删过的永不再来"。
+        // 这里漏了它，落盘一次墓碑就没了，删除立刻开始复活。
+        deleted_ids: Array.isArray(manifest.deleted_ids)
+          ? manifest.deleted_ids.filter((x) => typeof x === 'string')
+          : [],
       },
       persona: ensurePersonaStructure(persona),
       relationship: sanitizeRelationship(relationship),
@@ -423,15 +439,95 @@ export function migrateArchive(archive) {
   return { archive: current, warnings };
 }
 
-/** 两个档案的合并策略：把 incoming 的条目并进 base，按 id 去重，base 优先 */
-export function mergeArchives(base, incoming) {
-  const seen = new Set(base.diary.map((e) => e.id));
-  const merged = [...base.diary];
-  for (const e of incoming.diary) {
-    if (seen.has(e.id)) continue;
-    seen.add(e.id);
-    merged.push(e);
+/**
+ * 两个档案的合并策略：把 incoming 的条目并进 base，按 id 去重，base 优先。
+ *
+ * ── 传了 `baselineIds` 就是**三路合并**，这是并发写入的正解 ──
+ *
+ * 场景：同一份档案被很多个会话同时打开（实测 10 个），每个会话启动时读进内存、
+ * 落盘时**整份重写**。不合并的话，谁后落盘谁赢，另一个刚写的条目被静默抹掉。
+ *
+ * 但只做并集（`base ∪ incoming`）会**把删除弄坏** —— 落盘前读一次磁盘，
+ * 刚删掉的条目又回来了。三条测试当场抓到。
+ *
+ * 所以需要第三个信息：**这个会话加载时磁盘上有什么**（`baselineIds`）。
+ * 有了它，"谁删了什么"就能推出来：
+ *
+ *   | 内存 | 磁盘 | 基线 | 含义 | 处置 |
+ *   |---|---|---|---|---|
+ *   | 有 | 有 | — | 两边都有 | 留内存的（它对已知条目最新） |
+ *   | 有 | 无 | 有 | **别人删了它** | 丢掉，别复活 |
+ *   | 有 | 无 | 无 | 我们自己刚加的 | 留着 |
+ *   | 无 | 有 | 有 | **我们自己删了它** | 不加回来 |
+ *   | 无 | 有 | 无 | **别人刚加的** | 并进来 |
+ *   | 无 | 无 | — | 都删了 | 没有 |
+ *
+ * ⚠️ 光有基线**不够**：本会话自己新增、又自己删掉的条目不在基线里，
+ * 按上表会被当成"别人刚加的"捞回来 —— 面板上那个「忘掉」和「焚毁」
+ * 就是这样坏掉的，三条测试当场抓到。
+ *
+ * 所以还要一张**墓碑**（`manifest.deleted_ids`）：删过的 id 只增不减，
+ * **夹在两边的墓碑并集里就永远不加回来**。它同时管住了跨会话的删除。
+ *
+ * 不传 `baselineIds` 时退回简单并集（老行为），给不关心删除的调用方用。
+ *
+ * ⚠️ **调用方有责任保证磁盘真的读到了**：磁盘读失败时如果还传一个空基线，
+ * 上表第一行会全部退化成"别人删了它"，**整个档案会被清空**。
+ * 读不到就别调这个函数。
+ *
+ * @param {object} base 内存里的档案（优先）
+ * @param {object} incoming 磁盘上的档案
+ * @param {object} [options]
+ * @param {Set<string>|string[]} [options.baselineIds] 加载时磁盘上的 id 集合
+ */
+export function mergeArchives(base, incoming, options = {}) {
+  const baseline =
+    options.baselineIds instanceof Set
+      ? options.baselineIds
+      : Array.isArray(options.baselineIds)
+        ? new Set(options.baselineIds)
+        : null;
+
+  // 墓碑取并集：两边删过的都算删过，谁也别复活
+  const tombstones = new Set([
+    ...(base.manifest?.deleted_ids ?? []),
+    ...(incoming.manifest?.deleted_ids ?? []),
+  ]);
+
+  const memoryIds = new Set(base.diary.map((e) => e.id));
+  const diskIds = new Set(incoming.diary.map((e) => e.id));
+
+  let merged;
+  if (baseline === null) {
+    merged = [...base.diary];
+    for (const e of incoming.diary) if (!memoryIds.has(e.id)) merged.push(e);
+  } else {
+    merged = [];
+    // 1) 内存里的：磁盘没有它，而基线有 → 别人删了，丢掉
+    for (const e of base.diary) {
+      if (diskIds.has(e.id)) { merged.push(e); continue; }
+      if (baseline.has(e.id)) continue; // 别人删的
+      merged.push(e); // 我们自己刚加的
+    }
+    // 2) 磁盘上的：内存没有它 → 先问墓碑，再问基线
+    for (const e of incoming.diary) {
+      if (memoryIds.has(e.id)) continue;
+      if (tombstones.has(e.id)) continue; // 删过，永不复活
+      if (baseline.has(e.id)) continue; // 我们自己删的
+      merged.push(e); // 别人刚加的
+    }
   }
+  // ⚠️ **这里不要再兜底过滤一遍。**
+  //
+  // 写过一版 `merged = merged.filter(e => !tombstones.has(e.id))`，看着更保险，
+  // 实际把**导入**弄坏了：焚毁立碑 → 导入同一个包 → 磁盘上的墓碑还在
+  // （墓碑取并集）→ 刚导入的条目被滤掉 → **导入等于没导**。端到端测试当场抓到。
+  //
+  // 正解是各管各的：
+  //   · 内存里活着的条目**以内存为准** —— 它要么是我们刚加的，要么已经
+  //     在循环 1 里按基线判过了
+  //   · 墓碑只管"**从磁盘新加进来的**"那一路（循环 2），也就是基线
+  //     帮不上忙的那一种
   merged.sort((a, b) => a.created_at - b.created_at);
 
   const traitByKey = new Map(base.relationship.traits.map((t) => [t.key, t]));
@@ -463,6 +559,7 @@ export function mergeArchives(base, incoming) {
       created_at: Math.min(base.manifest.created_at, incoming.manifest.created_at),
       updated_at: Date.now(),
       diary_count: merged.length,
+      deleted_ids: [...tombstones],
     },
     persona: base.persona,
     relationship: {

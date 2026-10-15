@@ -40,7 +40,7 @@ import { evaluateGate, SUPPRESS_RE, DEFAULT_GATE_OPTIONS } from '../core/gate.mj
 import { buildIndex, selectMemories, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
-import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
+import { renderMemoryBlock, DEFAULT_BUDGET, MAX_NOTES } from '../core/persona.mjs';
 import { calendarDaysBetween, stripTimeWords } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
@@ -174,6 +174,17 @@ export function apply(ctx, rawConfig) {
   const archiveDirectory = resolveArchiveDir(config);
   /** 当前档案（内存副本，写盘后保持一致） */
   let archive = createEmptyArchive(Date.now());
+  /**
+   * **加载时磁盘上有哪些日记 id** —— 三路合并的"基线"。
+   *
+   * 只在这里赋值一次，之后**永不更新**。它是判断"谁删了什么"的唯一依据：
+   *
+   *   内存没有、磁盘没有、基线有 → 我们删的
+   *   内存没有、基线没有、磁盘有 → 别人刚加的
+   *
+   * 详见 `mergeArchives` 的表格。
+   */
+  let loadedIds = new Set();
   /** 倒排索引 —— 纯派生，每次加载档案后重建，不落盘 */
   let index = buildIndex([]);
   let ready = false;
@@ -273,6 +284,8 @@ export function apply(ctx, rawConfig) {
       // 老化 + 重建索引
       archive = decayArchive(archive, { now: Date.now() }).archive;
       index = buildIndex(archive.diary);
+      // 基线只在这里定一次：之后落盘前的三路合并全靠它判断"谁删了什么"
+      loadedIds = new Set(archive.diary.map((e) => e.id));
       ready = true;
       log(`档案就绪：${archive.diary.length} 条日记`);
 
@@ -351,14 +364,68 @@ export function apply(ctx, rawConfig) {
     }
   }
 
+  /**
+   * 落盘前，把**磁盘上别的会话刚写的**东西并进内存。
+   *
+   * ── 为什么必须有这一步 ──
+   *
+   * `archiveToFiles()` 是**整份重建**：内存里有什么就写什么，磁盘上多出来的一律抹掉。
+   *
+   * 单会话时没事。但同一份档案会被**很多个会话**同时打开 ——
+   * 实测有 **10 个会话**往同一个档案里写过。每个会话启动时把档案读进内存，
+   * 落盘时整份重写：
+   *
+   *   会话 A 写了 X，落盘
+   *   会话 B 内存里没有 X，写 Y，落盘 → **X 被抹掉了**
+   *
+   * 谁后落盘谁赢。而且这种丢失**检测不出来**：B 覆盖 A 的第 5 条时，
+   * 编号照样是 1..10 连续的 —— 不撞号也不断号。
+   *
+   * 所以写之前先读一遍，按 id 并一下。**内存优先**（它对已知的条目最新），
+   * 磁盘补充内存没有的。`mergeArchives` 就是干这个的。
+   *
+   * ── 这个修法换来了什么、代价是什么 ──
+   *
+   * 换来：**新增的条目不会再被静默抹掉。** 这是唯一会真吃掉用户数据的路径。
+   *
+   * 代价：**删除在并发下可能被翻回来。** 会话 B 内存里还留着用户刚在会话 A
+   * 删掉的那条，B 一落盘它就回来了。这个取舍是故意的 ——
+   * *恢复一条看得见的删错，比丢一条看不见的东西便宜。*
+   * 要根治得给删除加墓碑（tombstone），那是另一个量级的改动，先记着。
+   */
+  async function mergeDiskEntries() {
+    try {
+      const { files } = await readArchiveDir(archiveDirectory);
+      // ⚠️ **读不到就别合。** 磁盘读失败时传个空基线，会让
+      // `mergeArchives` 把"内存有、磁盘没有"全判成"别人删了它"，
+      // 一个档案瞬间清空。宁可这一次不防丢，也不能把档案写没。
+      if (files.size === 0) return 0;
+      const entries = [...files].map(([n, text]) => ({ name: n, text: () => text }));
+      const { archive: disk } = archiveFromFiles(entries, { now: Date.now() });
+      const before = archive.diary.length;
+      archive = mergeArchives(archive, disk, { baselineIds: loadedIds });
+      index = buildIndex(archive.diary);
+      const gained = archive.diary.length - before;
+      if (gained > 0) log(`落盘前并进了 ${gained} 条别的会话刚写的日记`);
+      return gained;
+    } catch (err) {
+      // 读不到就照常写 —— 合并是**尽力而为的防丢**，不能因为它失败就不落盘
+      warn(`落盘前合并失败（继续写，但可能覆盖别的会话）：${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
   function persist() {
     if (!ready) return writeChain;
-    const snapshot = archive;
     writeChain = writeChain
       .then(async () => {
-        archive.manifest.updated_at = Date.now();
-        await writeArchiveDir(archiveDirectory, archiveToFiles(snapshot));
-        await writeReadableDiary(snapshot);
+        // ⚠️ 顺序要紧：**先并、再改时间戳、再写。**
+        // 合并会把 archive 换成新对象，所以 snapshot 必须在合并之后取。
+        await mergeDiskEntries();
+        const merged = archive;
+        merged.manifest.updated_at = Date.now();
+        await writeArchiveDir(archiveDirectory, archiveToFiles(merged));
+        await writeReadableDiary(merged);
       })
       .catch((err) => {
         warn(`写档案失败：${err instanceof Error ? err.message : String(err)}`);
@@ -404,11 +471,20 @@ export function apply(ctx, rawConfig) {
       //   事件 → 「最近的事」/「突然想起来」（会被召回）
       //   判断 → 「我自己想的」（永远在场，不进召回池）
       //
-      // 判断**不参与召回**：它本来每轮都在，再被"想起来"一次是重复。
-      const notes = archive.diary.filter((e) => e?.kind === 'note');
+      // ⚠️ **"永远在场"这个前提在高频下失效了。** 判断段只放得下
+      // `MAX_NOTES` 条（8 → 4，因为 8 条会吃光预算、把日记段挤到 0%）。
+      // 被挤出窗口的判断如果还不进召回池，那就不是"以后想起来"，
+      // 是**彻底看不见** —— 而这个区是"是我"，丢了最可惜。
+      //
+      // 所以分流改成两截：
+      //   最近 MAX_NOTES 条 → 「我自己想的」（永远在场）
+      //   更早的那些        → **加入召回池**，相关时能被想起来
+      const allNotes = archive.diary.filter((e) => e?.kind === 'note');
       const events = archive.diary.filter((e) => e?.kind !== 'note');
+      const shownNotes = allNotes.slice(-MAX_NOTES);
+      const olderNotes = allNotes.slice(0, -MAX_NOTES);
 
-      const { chosen } = selectMemories(events, index, query, s, s.turn, {
+      const { chosen } = selectMemories([...events, ...olderNotes], index, query, s, s.turn, {
         highSim: config.highSim,
         maxShow: config.maxShowPerTurn,
         wanderChance: config.wanderChance,
@@ -440,8 +516,9 @@ export function apply(ctx, rawConfig) {
         persona: archive.persona,
         relationship: { ...archive.relationship, since: archive.manifest.created_at },
         lexicon: archive.lexicon,
-        // 第三区：**我自己想的**（判断）。永远在场，不进召回池。
-        notes,
+        // 第三区：**我自己想的**（判断）。最近几条永远在场，
+        // 更早的那些走召回（见上面 allNotes 的分流）。
+        notes: shownNotes,
         recent,
         recalled: chosen,
         handNotes,
@@ -892,6 +969,13 @@ export function apply(ctx, rawConfig) {
     const before = archive.diary.length;
     archive.diary = archive.diary.filter((e) => e?.id !== id);
     if (archive.diary.length === before) return false;
+    // ⚠️ **删了就得立碑。** 不立的话，落盘前的三路合并会读一遍磁盘 ——
+    // 那条还在磁盘上，内存里没有，基线里可能也没有（本会话刚加的）
+    // → 判成"别人刚加的" → **捞回来**。面板上的「忘掉」当场失效。
+    // 详见 mergeArchives 的说明。
+    const tombstones = new Set(archive.manifest.deleted_ids ?? []);
+    tombstones.add(id);
+    archive.manifest.deleted_ids = [...tombstones];
     // 索引是纯派生的，必须跟着重建 —— 否则"忘掉"的条目还能被召回
     index = buildIndex(archive.diary);
     for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
@@ -940,7 +1024,25 @@ export function apply(ctx, rawConfig) {
       const bytes = new Uint8Array(await readFile(srcPath));
       const { archive: incoming, warnings, ok } = unpackArchive(bytes, { now: Date.now() });
       if (!ok) throw new Error(`档案打不开：${warnings.join('；')}`);
-      archive = mode === 'replace' ? incoming : mergeArchives(archive, incoming);
+
+      if (mode === 'replace') {
+        // ⚠️ **replace 必须顺手撤碑，还要重置基线。**
+        // 否则：焚毁立碑 → 导入同一个包 → 那些 id 全在墓碑上（而且
+        // 磁盘上的墓碑会被并回来）→ **导入等于没导**。端到端测试抓到的。
+        //
+        // 导入是"我明确要这些东西回来"，墓碑该让位。
+        // 基线也要重设：替换之后"谁删过什么"那段历史就不成立了，
+        // 不重设的话导入进来的老条目会被判成"别人删了它"。
+        archive = { ...incoming, manifest: { ...incoming.manifest, deleted_ids: [] } };
+        loadedIds = new Set(archive.diary.map((e) => e.id));
+      } else {
+        // merge 模式：并进来的东西同样要撤碑，不然"导入一个之前删过的条目"永远fail
+        const incomingIds = new Set(incoming.diary.map((e) => e.id));
+        const kept = (archive.manifest.deleted_ids ?? []).filter((id) => !incomingIds.has(id));
+        archive = mergeArchives(archive, incoming);
+        archive = { ...archive, manifest: { ...archive.manifest, deleted_ids: kept } };
+      }
+
       index = buildIndex(archive.diary);
       for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
       await persist();
@@ -949,8 +1051,14 @@ export function apply(ctx, rawConfig) {
     /** 一键焚毁：清空全部记忆，不可恢复 */
     async burn() {
       await loadPromise;
+      // ⚠️ **焚毁要把清掉的 id 全部立碑。** 换一份新档案不等于删除 ——
+      // 落盘前的三路合并会读磁盘，而那些 id 既不在新内存里、基线里又可能
+      // 没有（本会话刚写的），会被判成"别人刚加的"捞回来。有测试盯着。
+      const tombstones = new Set(archive.manifest.deleted_ids ?? []);
+      for (const e of archive.diary) tombstones.add(e.id);
       const persona = ensurePersonaStructure(readBundledDefaultPersona());
       archive = createEmptyArchive(Date.now(), persona);
+      archive.manifest.deleted_ids = [...tombstones];
       index = buildIndex([]);
       for (const s of sessionStates.values()) {
         s.diaryCount = 0;
