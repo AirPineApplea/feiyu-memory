@@ -6,12 +6,13 @@
  * **它跟 `selfcheck.cmd` 的区别：**
  *
  * `selfcheck` 只回答"测试过没过"（测试 + yaml 两样）。
- * 这个回答的是"**现在这个状态能不能发出去**" —— 多查四类：
+ * 这个回答的是"**现在这个状态能不能发出去**" —— 多查五类：
  *
  *   版本与发布就绪   package.json / exports / files / LICENSE
  *   文档一致性       **文档里写的数字跟实际对不对得上**
  *   档案健康         jsonl 能不能解析、manifest 计数骗不骗人
  *   仓库卫生         有没有误提交的垃圾、工作区干不干净
+ *   隐私             **有没有档案文件被 git 追踪、提交身份是不是真邮箱**
  *
  * ── 为什么"文档一致性"要单独列一类 ──
  *
@@ -31,6 +32,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { leaksArchive } from './privacy-patterns.mjs';
 
 const run = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -344,6 +346,58 @@ else {
 
 const log = await git(['log', '--oneline', '-1']);
 if (log) ok('仓库', `HEAD: ${log}`);
+
+/* ═══════════════ 6. 隐私（这一推就收不回来了） ═══════════════ */
+
+/**
+ * 为什么这一类要单独列：
+ *
+ * 代码错了能改，**推出去的隐私收不回来。** 而且"顺手发上去"这个动作
+ * 恰恰发生在发版、改描述、建 Release 的时候 —— 就是 doctor 会跑的时候。
+ *
+ * 所以这里把"不该出现在公开仓库里的东西"变成断言。
+ * 模式表在 `./privacy-patterns.mjs`，那样才**测得了**它。
+ */
+const trackedFiles = (await git(['ls-files']))?.split('\n').filter(Boolean) ?? [];
+const leaked = [];
+for (const f of trackedFiles) {
+  const why = leaksArchive(f);
+  if (why !== null) leaked.push(`${f}  ← ${why}`);
+}
+if (leaked.length > 0) {
+  fail('隐私', `**仓库里有用户档案！**\n      ${leaked.join('\n      ')}`);
+} else ok('隐私', `没有任何档案文件被追踪（${trackedFiles.length} 个文件扫过）✓`);
+
+// 提交身份：真邮箱会被 GitHub 永久挂在每个提交上
+const authors = (await git(['log', '--format=%ae']))?.split('\n').filter(Boolean) ?? [];
+const uniqAuthors = [...new Set(authors)];
+const realMail = uniqAuthors.filter(
+  (e) => !/@users\.noreply\.github\.com$/.test(e) && !/@example\.(com|org)$/.test(e),
+);
+if (realMail.length > 0) {
+  warn(
+    '隐私',
+    `提交里带着非 noreply 邮箱：${realMail.join(', ')}\n` +
+      `      它会被永久写进每个提交。想换：git filter-repo，或者只改之后的提交`,
+  );
+} else if (uniqAuthors.length > 0) {
+  ok('隐私', `提交身份是 noreply 邮箱 ✓（${uniqAuthors.join(', ')}）`);
+}
+
+// 被追踪的文件里不该出现本机路径 / 用户名
+const localPaths = [];
+for (const f of trackedFiles) {
+  if (!/\.(mjs|js|json|md|yml|yaml|txt)$/.test(f)) continue;
+  const text = read(f);
+  if (text === null) continue;
+  for (const line of text.split('\n')) {
+    const m = /[A-Za-z]:[\\/]Users[\\/]([^\\/\s"']+)/.exec(line);
+    if (m) localPaths.push(`${f}：${m[0]}`);
+  }
+}
+if (localPaths.length > 0) {
+  warn('隐私', `被追踪的文件里有本机绝对路径（会露出你的用户名）：\n      ${[...new Set(localPaths)].slice(0, 6).join('\n      ')}`);
+} else ok('隐私', '被追踪的文件里没有本机路径 ✓');
 
 /* ═══════════════ 汇总 ═══════════════ */
 
