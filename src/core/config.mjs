@@ -159,7 +159,26 @@ export const CONFIG_DEFAULTS = Object.freeze(
   Object.fromEntries(CONFIG_SPEC.map((f) => [f.key, f.default])),
 );
 
+// ★ 解 cosmokit volatile 引用（DSH 0.2.x 会把 config 值包成引用）。
+//   ★ 病：coerce 把引用当普通值 → String(ref) 得 "[object Object]"
+//     → path.resolve 相对进程 cwd ⇒ 档案落在 cwd 下的 [object Object] 目录。
+//   ★ 判定口径同 @deepseek-ai/cosmokit isVolatile：`write in value`，
+//     write = Symbol.for('cosmokit.volatile.write')。用 Symbol.for 探测，不引依赖。
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
+
+/** 解开 cosmokit 的 volatile 引用；不是引用就原样返回。 */
+function unref(value) {
+  if (typeof value !== 'object' || value === null) return value;
+  if (!(VOLATILE_WRITE in value) || typeof value.get !== 'function') return value;
+  try {
+    return value.get();
+  } catch {
+    return undefined;
+  }
+}
+
 function coerce(field, value) {
+  value = unref(value);
   if (value === undefined || value === null) return field.default;
 
   if (field.type === 'boolean') {
