@@ -1,141 +1,42 @@
 /**
- * 闸门 —— 决定"这一刻值不值得记"。
+ * 这里原本是一套「关键词闸门」——用正则判断这一轮值不值得记。**拆掉了。**
  *
- * 全部本地、零模型 token。这是整个成本结构的支点：
- * 闸门不开，就一次模型调用都不发。
+ * ─────────────────────────────────────────────────────────────
+ * 旧的那套长这样：
  *
- * 设计取舍：硬信号（纠正 / 明确要求记住 / 自我披露）**立刻开闸**，
- * 因为漏掉这些的代价远大于多花一次调用。软信号累计打分，过阈值才开。
- * 开闸后有冷却，避免"每轮都记"把日记写成流水账。
+ *   硬信号：/不对|我说的是/ → 记      /记住|记一下/ → 记      /我其实|说实话/ → 记
+ *   软信号：脏话 +1.5、感叹号 +1、说了一大段 +1、同一话题 +1、会话不短 +0.5
+ *   冷却：开一次闸后 3 轮不开
+ *
+ * 它有三个洞，都是**结构性的**，不是参数没调好：
+ *
+ *   一、**看不到没命中的话。** 用户讲了一件十几年前的旧事，整段没有一个词能命中
+ *       —— 它根本不知道那句话存在。**不是判错，是没判。**
+ *   二、**假阳性。** "我其实不太饿"命中 /我其实/，记一条废话。
+ *   三、**判据被写死在一个人的先验里。** 写表的人没想到的说法，一律不记。
+ *       而语言是开放的，永远补不全。
+ *
+ * 而那个位置的错误代价**不对称**：
+ *
+ *   漏记一条 → 永久没了，而且你连"少了什么"都不知道
+ *   多记一条 → 占几行，能删、能降级、能不管
+ *
+ * **在"漏了永远看不见"的位置上，该选漏得少的那个，不是便宜的那个。**
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 替代品：`judge.mjs` —— 每轮把用户刚说的那一句交给模型看一眼。
+ *
+ * 成本：约 260 token / 轮（system 里三条听法 + 那一句 + 一个词），
+ * **比固化本身还便宜一半以上**。
+ *
+ * 那三条听法（任务不催你 / 说得越随便压得越久 / 了解有没有变一点）
+ * 是**通用判据**，随插件发给所有人。用户自己的偏好放 `手记.md`，当补充。
  */
 
-/** 硬信号：命中即开闸（除非用户说了"别记"） */
-const HARD_SIGNALS = [
-  {
-    key: 'correction',
-    weight: 3,
-    label: '用户在纠正我',
-    re: /不对|不是这个|不是那|我说的是|你搞错|你理解错|没听懂|重来|理解偏|错了|你弄错/,
-  },
-  {
-    key: 'remember',
-    weight: 3,
-    label: '用户明确要求记住',
-    re: /记住|记一下|记着点|别忘了|以后都|下次要|你要记得/,
-  },
-  {
-    key: 'disclosure',
-    weight: 2.5,
-    label: '用户自我披露',
-    re: /我其实|说实话|我跟你说|我跟你讲|我最近|我家里|我妈|我爸|我老婆|我老公|我女朋友|我男朋友|我对象|我室友|我同事|我老板|我领导|我朋友|我同学/,
-  },
-];
-
-/** 情绪词 —— 是"信号"不是"审查"，只用来判断这一刻信息密度高 */
-const EMOTION_WORDS =
-  /生气|烦死|崩溃|无语|离谱|气死|难受|郁闷|恶心|恶心人|服了|受不了|真香|绝了|牛|厉害|太好了|谢谢|感谢/;
-
-/** 强情绪（脏话类）—— 单独一档，权重更高 */
-const STRONG_EMOTION =
-  /妈的|靠|卧槽|我去|tmd|TMD|操|淦|沙雕|智障|白痴|傻逼|煞笔|废物/;
-
-/** 用户说"别记"—— 强制关闸，且本轮片段永不进候选池 */
+/**
+ * 用户说"别记" —— 强制跳过，本轮片段永不进候选池。
+ *
+ * ⚠️ **这一条不是启发式，是用户的控制。** 所以它留在同步路径上：
+ * 不需要问模型，看见了就跳过。
+ */
 export const SUPPRESS_RE = /别记|不要记|别存|不用记|忘掉这个|删除记忆/;
-
-/**
- * @typedef {object} GateOptions
- * @property {number} [threshold]      软信号开闸阈值（默认 2）
- * @property {number} [cooldownTurns]  开闸后冷却轮数（默认 3）
- * @property {number} [minTurns]       会话超过多少轮算"很长"（默认 15）
- * @property {number} [rantLength]     多长算"长篇吐槽"（默认 200 字符）
- * @property {number} [repeatOverlap]  与历史的重合度阈值（默认 0.35）
- */
-
-export const DEFAULT_GATE_OPTIONS = Object.freeze({
-  threshold: 2,
-  cooldownTurns: 3,
-  minTurns: 15,
-  rantLength: 200,
-  repeatOverlap: 0.35,
-});
-
-/**
- * @typedef {object} GateInput
- * @property {string} text              本轮用户消息
- * @property {number} turn              当前轮次（会话内，从 1 开始）
- * @property {string[]} [history]       最近若干轮用户文本（旧→新）
- * @property {number} [sessionTurns]    会话总轮数
- * @property {number} [lastOpenTurn]    上一次开闸的轮次
- * @property {number} [maxOverlap]      与历史的最大重合度（由调用方用 keywords.overlap 算好）
- */
-
-/**
- * 评估是否需要固化。
- *
- * @param {GateInput} input
- * @param {GateOptions} [options]
- * @returns {{open: boolean, score: number, reasons: string[], suppressed: boolean, hard: boolean}}
- */
-export function evaluateGate(input, options = {}) {
-  const opts = { ...DEFAULT_GATE_OPTIONS, ...options };
-  const text = typeof input?.text === 'string' ? input.text : '';
-  const turn = Number.isFinite(input?.turn) ? input.turn : 0;
-  const sessionTurns = Number.isFinite(input?.sessionTurns) ? input.sessionTurns : turn;
-
-  if (SUPPRESS_RE.test(text)) {
-    return { open: false, score: 0, reasons: ['用户说别记'], suppressed: true, hard: false };
-  }
-
-  /** @type {string[]} */
-  const reasons = [];
-  let score = 0;
-  let hard = false;
-
-  for (const sig of HARD_SIGNALS) {
-    if (sig.re.test(text)) {
-      reasons.push(sig.label);
-      score += sig.weight;
-      hard = true;
-    }
-  }
-
-  // 情绪强度
-  if (STRONG_EMOTION.test(text)) {
-    reasons.push('情绪很冲');
-    score += 1.5;
-  }
-  const bangs = (text.match(/[!！]/g) ?? []).length;
-  if (bangs >= 3 || EMOTION_WORDS.test(text)) {
-    reasons.push('情绪有波动');
-    score += 1;
-  }
-
-  // 长篇吐槽
-  if (text.length >= opts.rantLength) {
-    reasons.push('说了一大段');
-    score += 1;
-  }
-
-  // 老话题又来了
-  const maxOverlap = Number.isFinite(input?.maxOverlap) ? input.maxOverlap : 0;
-  if (maxOverlap >= opts.repeatOverlap) {
-    reasons.push('同一个话题又来了');
-    score += 1;
-  }
-
-  // 会话很长了，攒了不少东西
-  if (sessionTurns >= opts.minTurns) {
-    reasons.push('这个会话已经不短了');
-    score += 0.5;
-  }
-
-  // 冷却：刚记过就缓一缓（硬信号不受冷却限制）
-  const lastOpenTurn = Number.isFinite(input?.lastOpenTurn) ? input.lastOpenTurn : -Infinity;
-  const inCooldown = turn - lastOpenTurn < opts.cooldownTurns;
-  const softOpen = score >= opts.threshold;
-  const open = hard || (softOpen && !inCooldown);
-
-  if (!open && inCooldown && softOpen) reasons.push('刚记过，先缓一缓');
-
-  return { open, score, reasons, suppressed: false, hard };
-}

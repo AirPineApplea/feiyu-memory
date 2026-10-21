@@ -53,6 +53,11 @@ function makeHarness(reply = GOOD_REPLY) {
   let lastRequest = null;
   let streamCalls = 0;
   let llmReply = reply;
+  // 「记不记」那一次极短判断 —— 跟固化分开数
+  let judgeCalls = 0;
+  let lastJudgeRequest = null;
+  // 判断默认回"记"，这样老用例（不关心判断）不用改
+  let judgeReply = 'yes 测试环境默认记';
 
   /**
    * 假的 webServer —— 记录面板注册的路由，测试可以直接驱动它们。
@@ -85,6 +90,23 @@ function makeHarness(reply = GOOD_REPLY) {
 
   const llm = {
     stream(opts) {
+      // ⚠️ 现在一次"记不记"要走**两次**模型调用：
+      //   1. 判断（judge.mjs）—— 极短，只问 yes/no
+      //   2. 固化（consolidate.mjs）—— 产出日记
+      //
+      // 所以这个假 llm 得把两者分开数。**streamCalls 只数固化** ——
+      // 原来那批断言（"该调用模型" / "不该调用模型"）说的都是固化。
+      const isJudge = typeof opts?.system === 'string' && opts.system.includes('你是这条鱼的记性');
+      if (isJudge) {
+        judgeCalls += 1;
+        lastJudgeRequest = opts;
+        const verdict = judgeReply;
+        return (async function* gen() {
+          yield { type: 'text-delta', index: 0, text: verdict };
+          yield { type: 'finish', reason: 'stop' };
+        })();
+      }
+
       streamCalls += 1;
       lastRequest = opts;
       const text = llmReply;
@@ -204,6 +226,12 @@ function makeHarness(reply = GOOD_REPLY) {
     },
     getLastRequest: () => lastRequest,
     getStreamCalls: () => streamCalls,
+    // 「记不记」那次判断的计数和请求 —— 跟固化分开
+    getJudgeCalls: () => judgeCalls,
+    getLastJudgeRequest: () => lastJudgeRequest,
+    setJudgeReply: (r) => {
+      judgeReply = r;
+    },
     setReply: (r) => {
       llmReply = r;
     },
@@ -374,20 +402,26 @@ test('host: 用户说"别记"就一次模型都不调', async () => {
 
 /* ───────────────────────── 闸门 ───────────────────────── */
 
-test('host: 平平无奇的一句话不该触发任何模型调用', async () => {
+test('host: 平平无奇的一句话 —— 判断还是会被叫一次，但固化不该跑', async () => {
   await withHome(async (home) => {
     const h = makeHarness();
     apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
     const svc = h.provided.get('feiyuMemory');
     await svc.snapshot();
 
+    // 这就是换掉关键词闸门**想要**的行为：每一轮都让模型看一眼，
+    // 而不是拿一张正则表去猜"这句话里有没有值得记的信号"。
+    // 所以这句平平无奇的话**必须**触发一次判断，但模型说不记 → 固化不跑。
+    h.setJudgeReply('no 只是让我改个名字');
+
     const agent = h.makeAgent('s1');
     h.emit('agent/created', { agent });
     h.emit('session/event', { id: 's1' }, userEvent('帮我把这个函数改个名字'));
     h.emit('agent/turn-stopping', { agent, turn: 1 });
 
-    await new Promise((r) => setTimeout(r, 120));
-    assert.equal(h.getStreamCalls(), 0);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(h.getJudgeCalls(), 1, '每一轮都该问模型一句');
+    assert.equal(h.getStreamCalls(), 0, '模型说不记，就不该去固化');
     assert.equal((await svc.snapshot()).diaryCount, 0);
   });
 });

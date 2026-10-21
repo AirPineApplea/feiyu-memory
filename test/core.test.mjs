@@ -9,7 +9,7 @@ import { crc32, zipSync, unzipSync } from '../src/core/zip.mjs';
 import { scrub, scrubAll, noticeFor, PRESET_REMEMBER_NAMES } from '../src/core/privacy.mjs';
 import { tokenize, extractKeywords, overlap } from '../src/core/keywords.mjs';
 import { estimateTokens, truncateToTokens } from '../src/core/tokenize.mjs';
-import { evaluateGate, SUPPRESS_RE } from '../src/core/gate.mjs';
+import { SUPPRESS_RE } from '../src/core/gate.mjs';
 import { buildIndex, searchScores, selectMemories } from '../src/core/recall.mjs';
 
 /* ───────────────────────── zip ───────────────────────── */
@@ -170,47 +170,12 @@ test('tokenize: 预算足够时原样返回', () => {
   assert.equal(truncateToTokens('白饭', 10), '白饭');
 });
 
-/* ───────────────────────── gate ───────────────────────── */
+/* ───────────────────────── judge ───────────────────────── */
 
-test('gate: 用户纠正 → 立刻开闸', () => {
-  const r = evaluateGate({ text: '不对，我说的是 Python，不是 Java', turn: 5 });
-  assert.equal(r.open, true);
-  assert.equal(r.hard, true);
-});
-
-test('gate: 明确要求记住 → 开闸', () => {
-  assert.equal(evaluateGate({ text: '记住我讨厌铺垫', turn: 2 }).open, true);
-});
-
-test('gate: 普通一句话 → 不开闸', () => {
-  const r = evaluateGate({ text: '帮我看看这个函数', turn: 3, sessionTurns: 3 });
-  assert.equal(r.open, false);
-  assert.equal(r.score, 0);
-});
-
-test('gate: 说"别记" → 强制关闸并标记 suppressed', () => {
-  const r = evaluateGate({ text: '这个别记', turn: 5 });
-  assert.equal(r.open, false);
-  assert.equal(r.suppressed, true);
-});
-
-test('gate: 冷却期内软信号不开闸，但硬信号照开', () => {
-  const soft = evaluateGate(
-    { text: '说了一大堆' + '啊'.repeat(200), turn: 10, lastOpenTurn: 9 },
-    { cooldownTurns: 3 },
-  );
-  assert.equal(soft.open, false, '冷却期应挡住软信号');
-
-  const hard = evaluateGate({ text: '不对，你搞错了', turn: 10, lastOpenTurn: 9 });
-  assert.equal(hard.open, true, '硬信号不受冷却限制');
-});
-
-test('gate: 长篇吐槽累计到阈值', () => {
-  const r = evaluateGate({ text: '真的受不了了' + '烦'.repeat(200), turn: 8 });
-  assert.equal(r.open, true);
-  assert.ok(r.reasons.length > 0);
-});
-
+// 旧的关键词闸门拆了（三个结构性洞：看不到没命中的话、假阳性、判据写死），
+// 换成 judge.mjs 的模型判断。它的测试在 judge.test.mjs。
+//
+// SUPPRESS_RE 留着 —— 那不是启发式，是用户的控制。
 test('gate: SUPPRESS_RE 覆盖常见说法', () => {
   for (const t of ['别记这个', '不要记', '这个不用记', '忘掉这个']) {
     assert.ok(SUPPRESS_RE.test(t), t);

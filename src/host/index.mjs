@@ -37,13 +37,16 @@ import {
   PERSONA_FILE,
   normalizeDiaryEntry,
 } from '../core/archive.mjs';
-import { evaluateGate, SUPPRESS_RE, DEFAULT_GATE_OPTIONS } from '../core/gate.mjs';
+// 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
+// SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
+import { SUPPRESS_RE } from '../core/gate.mjs';
 import { buildIndex, selectMemories, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET, MAX_NOTES } from '../core/persona.mjs';
 import { calendarDaysBetween, stripTimeWords } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
+import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
 import {
   buildConsolidationInput,
@@ -803,6 +806,88 @@ export function apply(ctx, rawConfig) {
     });
   }
 
+  /**
+   * 判断"这一轮值不值得记"。**失败默认记** —— 用户定的：
+   * 漏了永远不知道，多记顶多占几行。
+   */
+  async function judgeWorthKeeping(sessionId) {
+    const s = stateOf(sessionId);
+    const said = String(s.lastUserText ?? '').trim();
+    if (said === '') return { keep: false, why: '这一轮他没说话' };
+
+    const llm = ctx.get('llm');
+    if (llm === undefined) return { keep: true, why: '没有 llm 服务，按默认记' };
+
+    const selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+    const provider = selection?.provider;
+    const model = config.model || selection?.model;
+    if (typeof provider !== 'string' || typeof model !== 'string') {
+      return { keep: true, why: '拿不到模型信息，按默认记' };
+    }
+
+    // 手记里的话当**补充**判据（不是唯一判据 —— 新用户的 手记 里没有判据，
+      // 判据本体在 judge.mjs 里随插件发）
+    let handNotes = [];
+    try {
+      const p = path.join(archiveDirectory, HANDNOTE_FILE);
+      if (existsSync(p)) handNotes = selectHandNotes(readFileSync(p, 'utf8'));
+    } catch {
+      // 读不到就不给，不影响判断
+    }
+
+    const built = buildJudgeInput({ lastUserText: said, handNotes });
+    const opts = {
+      provider,
+      model,
+      system: built.system,
+      messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
+      maxTokens: JUDGE_MAX_TOKENS,
+      temperature: 0,
+      // 后台任务绝不继承前台的思考档位（踩过：900 token 全烧在推理上）
+      reasoningEffort: 'off',
+      signal: abort.signal,
+    };
+
+    try {
+      let raw = '';
+      for await (const chunk of llm.stream(opts)) {
+        if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') raw += chunk.text;
+      }
+      const v = parseVerdict(raw);
+      log(`判断：${v.keep ? '记' : '不记'}${v.why ? ` —— ${v.why}` : ''}`);
+      return v;
+    } catch (err) {
+      warn(`判断失败，按默认记：${err instanceof Error ? err.message : String(err)}`);
+      return { keep: true, why: '判断失败，按默认记' };
+    }
+  }
+
+  /** 把判断丢进队列 —— 跟 enqueue 一个道理，绝不在 turn-stopping 的栈里发请求 */
+  function enqueueJudge(sessionId, agent) {
+    const s = stateOf(sessionId);
+    if (s.judging) return;
+    s.judging = true;
+    holdProcessOpen();
+    drainPromise = Promise.resolve(drainPromise)
+      .then(() => new Promise((resolve) => setImmediate(resolve)))
+      .then(async () => {
+        let kept = false;
+        try {
+          const v = await judgeWorthKeeping(sessionId);
+          if (v.keep) {
+            kept = true;
+            enqueue(sessionId, agent); // 它自己会 hold，也会在跑完后 release
+          }
+        } finally {
+          s.judging = false;
+          // ⚠️ 配对！judging 自己 hold 了 —— 如果不转交给固化，就必须自己放掉。
+          // 漏了这句，那个 ref 着的 setInterval 会让进程永远退不出去，
+          // 测试跑到这条就挂死（`node --test` 直接不返回）。
+          if (!kept) releaseProcessOpen();
+        }
+      });
+  }
+
   ctx.on('agent/turn-stopping', ({ agent }) => {
     // ⚠️ 这个事件是 serial，会被 await。这里必须**同步、极快**地返回。
     // 任何模型调用都丢给 drain()，绝不在这里 await。
@@ -817,31 +902,23 @@ export function apply(ctx, rawConfig) {
         return;
       }
 
-      // 与历史的最大话题重合度（本地，「同一个话题又来了」信号）
-      let maxOverlap = 0;
-      const priorUsers = s.transcript.filter((m) => m.role === 'user').slice(-8, -1);
-      for (const m of priorUsers) maxOverlap = Math.max(maxOverlap, overlap(m.text, s.lastUserText));
-
-      const gate = evaluateGate(
-        {
-          text: s.lastUserText,
-          turn: s.turn,
-          sessionTurns: s.turn,
-          lastOpenTurn: s.lastOpenTurn,
-          maxOverlap,
-        },
-        {
-          ...DEFAULT_GATE_OPTIONS,
-          minTurns: Math.max(4, Number(config.maxShowPerTurn ?? 1) + 3),
-        },
-      );
-
-      if (!gate.open) return;
-      s.lastOpenTurn = s.turn;
-      log(`开闸（${gate.reasons.join('、')}），排队固化`);
-      enqueue(id, agent);
+      // ── 旧的「关键词闸门」拆了，换成一次极短的模型判断 ──
+      //
+      // 原来这里是一张正则表：命中 /不对|记住|我其实/ 就开闸。它有三个洞：
+      //
+      //   · **看不到没命中的话**。用户讲了一件十几年前的旧事 ——
+      //     没有一个词能命中 —— 它根本不知道那句话存在。不是判错，是没判。
+      //   · **假阳性**。"我其实不太饿"命中 /我其实/，记一条废话。
+      //   · 判据被写死在我今天的先验里，我没想到的说法一律不记。
+      //
+      // 而那个位置的错误代价是**不对称的**：漏记一条永久没了、而且
+      // 你连"少了什么"都不知道；多记一条只是占几行。
+      //
+      // 所以换人站：把这一轮那句话交给模型看一眼。仍然**丢队列** ——
+      // 这个回调是 serial、会被 await，绝不能在栈里发请求。
+      enqueueJudge(id, agent);
     } catch (err) {
-      warn(`闸门判断失败：${err instanceof Error ? err.message : String(err)}`);
+      warn(`判断排队失败：${err instanceof Error ? err.message : String(err)}`);
     }
   });
 
@@ -1495,4 +1572,4 @@ function readBundledDefaultPersona() {
   return ensurePersonaStructure(DEFAULT_PERSONA);
 }
 
-export { DEFAULT_PERSONA, DEFAULT_RECALL_OPTIONS, DEFAULT_GATE_OPTIONS };
+export { DEFAULT_PERSONA, DEFAULT_RECALL_OPTIONS };
