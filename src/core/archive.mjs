@@ -291,6 +291,12 @@ export function normalizeDiaryEntry(raw) {
     salience: clamp01(raw.salience, 0.5),
     ...(raw.kind === 'failure' ? { resolved: raw.resolved === true } : {}),
     ...(typeof raw.session === 'string' ? { session: raw.session } : {}),
+    // 轮次 —— "续写同一条日记"靠它算窗口。
+    // 老条目没有这个字段，Number.isFinite(undefined) 是 false，所以它们永远不续写。
+    ...(Number.isFinite(raw.turn) ? { turn: Number(raw.turn) } : {}),
+    // 最后一次被追加的时间。created_at 不动，但排序看它 ——
+    // 否则刚续写的那条会按原始时间沉到下面去。
+    ...(Number.isFinite(raw.updated_at) ? { updated_at: Number(raw.updated_at) } : {}),
     created_at: Number(raw.created_at) || Date.now(),
     keywords: Array.isArray(raw.keywords) ? raw.keywords.filter((k) => typeof k === 'string').slice(0, 16) : [],
   };

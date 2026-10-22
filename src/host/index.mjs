@@ -549,7 +549,11 @@ export function apply(ctx, rawConfig) {
       //   最近 MAX_NOTES 条 → 「我自己想的」（永远在场）
       //   更早的那些        → **加入召回池**，相关时能被想起来
       const allNotes = archive.diary.filter((e) => e?.kind === 'note');
-      const events = archive.diary.filter((e) => e?.kind !== 'note');
+      const events = archive.diary
+      .filter((e) => e?.kind !== 'note')
+      // 续写过的条目 created_at 没动，但它是"刚写过的" —— 排序得看 updated_at，
+      // 否则刚补完的那条会按原始时间沉下去。
+      .sort((a, b) => (a.updated_at ?? a.created_at) - (b.updated_at ?? b.created_at));
       const shownNotes = allNotes.slice(-MAX_NOTES);
       const olderNotes = allNotes.slice(0, -MAX_NOTES);
 
@@ -972,10 +976,31 @@ export function apply(ctx, rawConfig) {
       .map((e) => `- ${e.text}`)
       .join('\n');
 
+    // ── 能不能续写上一条？──
+    //
+    // 固化每次看"最后 12 条消息"，越往后素材越全 —— 同一段对话会被续着写
+    // 成 138 / 232 / 309 字三张快照，讲的是同一件事，占掉「最近的事」三个位。
+    // 所以：同一个 session、轮数差在窗口内、而且还没到 appendMaxChars，
+    // 就把上一条一起给模型，让它只写"多出来的那部分"。
+    const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWindowTurns : 4;
+    const appendMax = DEFAULT_CONSOLIDATION.appendMaxChars;
+    const lastEvent = [...archive.diary]
+      .reverse()
+      .find((e) => e.kind !== 'note' && e.session === sessionId);
+    const extendTarget =
+      lastEvent &&
+      Number.isFinite(lastEvent.turn) &&
+      s.turn - lastEvent.turn <= appendWindow &&
+      lastEvent.text.length < appendMax
+        ? lastEvent
+        : null;
+    if (extendTarget) log(`续写上一条 ${extendTarget.id}（轮数差 ${s.turn - extendTarget.turn}）`);
+
     const built = buildConsolidationInput({
       transcript: scrubbed.text,
       relationship: archive.relationship,
       recentDiary,
+      extend: extendTarget,
     });
 
     const messages = [{ role: 'user', content: [{ type: 'text', text: built.user }] }];
@@ -1070,7 +1095,13 @@ export function apply(ctx, rawConfig) {
     const applied = applyConsolidation(
       archive,
       parsed,
-      { now: Date.now(), session: sessionId, sessionDiaryCount: s.diaryCount },
+      {
+        now: Date.now(),
+        session: sessionId,
+        sessionDiaryCount: s.diaryCount,
+        sessionTurn: s.turn,
+        extendId: extendTarget ? extendTarget.id : undefined,
+      },
       {
         minSalience: config.minSalience,
         maxTraitConfidence: DEFAULT_CONSOLIDATION.maxTraitConfidence,
@@ -1078,11 +1109,13 @@ export function apply(ctx, rawConfig) {
     );
 
     archive = applied.archive;
-    if (applied.accepted) {
+    if (applied.accepted && !applied.appended) {
       s.diaryCount += 1;
       // 刻意**不打日记正文** —— 调试日志也不该落盘私人内容（SPEC §6.3）
       const e = archive.diary[archive.diary.length - 1];
       log(`记下一条 ${e?.id ?? ''}（${e?.kind ?? '?'}，salience ${(e?.salience ?? 0).toFixed(2)}）`);
+    } else if (applied.appended) {
+      log('续写完成（没有新增条目）');
     }
     for (const n of applied.notes) log(n);
 

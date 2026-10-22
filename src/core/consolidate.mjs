@@ -129,6 +129,16 @@ export const DEFAULT_CONSOLIDATION = Object.freeze({
   fallbackTag: '琐事',
   /** 单次会话最多产出多少条日记。门槛降了，上限得跟着抬，否则一开闸就记满 */
   maxPerSession: 12,
+  /**
+   * 续写同一条日记时，正文最多多少字。到了这个数就不再续，另起一条。
+   *
+   * 为什么需要：固化每次看的是"最后 12 条消息"，越往后素材越全 —— 同一条日记
+   * 会被续着写长。实测一组 422 → 561 → 707 字，讲的全是同一件事，
+   * 在「最近的事」窗口里占了 3 个位。
+   *
+   * 续写让"一件事 = 一条日记"；上限让它不会长成一篇。
+   */
+  appendMaxChars: 500,
   /** 单个 trait 的 confidence 上限，避免某条偏好被无限强化 */
   maxTraitConfidence: 20,
   /** 每天衰减系数 */
@@ -164,6 +174,20 @@ export function buildConsolidationInput(input = {}) {
       .join('；');
     chunks.push(
       `【已经知道的】\n${traits ? `偏好：${traits}` : ''}${open ? `\n还没解决的：${open}` : ''}`,
+    );
+  }
+
+  // 这条可能还没写完 —— 上一轮刚记过同一件事
+  if (input.extend && typeof input.extend.text === 'string' && input.extend.text.trim() !== '') {
+    chunks.push(
+      [
+        '【这条已经记过了，可能是同一件事的延续】',
+        `「${input.extend.text.trim()}」`,
+        '',
+        '如果这一轮是上面那件事的后续或补充：**不要重写全文**，只把"多出来的那部分"' +
+          '写进 "diary.append"（一两句就够）。',
+        '如果这一轮是另一件事：照常写 "diary.text"，append 留空。',
+      ].join('\n'),
     );
   }
 
@@ -317,7 +341,42 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
   // —— 日记 ——
   const rawDiary = parsed?.diary;
   let accepted = false;
-  if (rawDiary && typeof rawDiary.text === 'string' && rawDiary.text.trim() !== '') {
+  let appended = false;
+
+  // —— 续写：把补充内容拼到已有那条后面，不新建条目 ——
+  //
+  // 为什么不新建：固化每次看最后 12 条消息，越往后素材越全。同一段对话
+  // 被续着写三次，就是"同一件事的三张快照"（138 / 232 / 309 字），
+  // 读起来像拍了三张照片，而且占掉三个窗口位。
+  const appendText = typeof rawDiary?.append === 'string' ? rawDiary.append.trim() : '';
+  // extendId 从 context 来（"续哪条"是调用方知道的），也收 options 里给的（方便直接测）
+  const extendId = typeof context?.extendId === 'string' ? context.extendId : opts.extendId;
+  const appendMax = Number.isFinite(opts.appendMaxChars)
+    ? opts.appendMaxChars
+    : DEFAULT_CONSOLIDATION.appendMaxChars;
+  if (appendText !== '' && typeof extendId === 'string') {
+    const i = next.diary.findIndex((e) => e.id === extendId);
+    if (i < 0) {
+      notes.push('要续写的那条找不到了，丢弃');
+    } else if (next.diary[i].text.length + 1 + appendText.length > appendMax) {
+      notes.push(`续写后超过 ${appendMax} 字，丢弃`);
+    } else {
+      const sal = clamp(rawDiary.salience, 0, 1, 0.5);
+      const merged = next.diary[i].text + '\n' + appendText;
+      next.diary[i] = {
+        ...next.diary[i],
+        text: merged,
+        salience: Math.max(next.diary[i].salience ?? 0, sal),
+        updated_at: now,
+        keywords: extractKeywords(merged, { max: 12 }),
+      };
+      notes.push('续写到已有那条');
+      accepted = true;
+      appended = true;
+    }
+  }
+
+  if (!accepted && rawDiary && typeof rawDiary.text === 'string' && rawDiary.text.trim() !== '') {
     const salience = clamp(rawDiary.salience, 0, 1, 0.5);
     const tags = Array.isArray(rawDiary.tags)
       ? rawDiary.tags.filter((t) => typeof t === 'string' && t.trim() !== '').slice(0, 8)
@@ -342,6 +401,8 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
         salience,
         ...(kind === 'failure' ? { resolved: rawDiary.resolved === true } : {}),
         ...(typeof context.session === 'string' ? { session: context.session } : {}),
+        // 轮次：下一轮靠它判断"这是不是同一件事还没写完"
+        ...(Number.isFinite(context.sessionTurn) ? { turn: context.sessionTurn } : {}),
         created_at: now,
         keywords: extractKeywords(text, { max: 12 }),
       });
@@ -462,7 +523,7 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
   next.manifest.updated_at = now;
   next.manifest.diary_count = next.diary.length;
 
-  return { archive: next, notes, accepted };
+  return { archive: next, notes, accepted, appended };
 }
 
 /* ───────────────── 这里原本有 appendPersonaLearnings，删了 ───────────────── */
