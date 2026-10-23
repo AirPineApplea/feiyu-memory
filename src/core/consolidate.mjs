@@ -177,6 +177,22 @@ export const DEFAULT_CONSOLIDATION = Object.freeze({
   maxTraitConfidence: 20,
   /** 每天衰减系数 */
   decayRate: 0.9,
+  /**
+   * 衰减的**地板**。
+   *
+   * 原来没有底：salience = 0.9^天数 × 原值，一路乘到 1e-5。
+   * 中位 0.70 那条**大约 17 天**就跌破召回门槛（0.15），30 天 0.03，90 天 0.00008。
+   *
+   * 那不是"淡了"，那是"死了"——只是还占着磁盘。
+   *
+   * 人会淡，但不会归零：十年前的事偶尔还会自己冒出来。**那正是"完整的一生"要的部分。**
+   *
+   * 取 0.16 —— 略高于召回门槛（0.15），所以老条目**永远留在随机池里**，
+   * 只是抽中的概率越来越低（随机池按 salience 加权）。
+   *
+   * 注意它必须**低于** grievanceForgiveBelow（0.2），否则旧账永远平不掉。
+   */
+  salienceFloor: 0.16,
   /** 旧账每天衰减系数（比记忆慢，但最终会消解） */
   grievanceDecay: 0.97,
   /** 旧账强度低于此值算翻篇了 */
@@ -650,22 +666,22 @@ export function decayArchive(archive, options = {}) {
 
   const diary = (archive.diary ?? []).map((e) => ({
     ...e,
-    salience: Math.max(0, (Number.isFinite(e.salience) ? e.salience : 0.5) * memFactor),
+    salience: Math.max(opts.salienceFloor, (Number.isFinite(e.salience) ? e.salience : 0.5) * memFactor),
   }));
 
   const items = (archive.lexicon?.items ?? []).map((i) => ({
     ...i,
-    salience: Math.max(0, (Number.isFinite(i.salience) ? i.salience : 0.5) * memFactor),
+    salience: Math.max(opts.salienceFloor, (Number.isFinite(i.salience) ? i.salience : 0.5) * memFactor),
   }));
 
   const traits = (archive.relationship?.traits ?? []).map((t) => ({
     ...t,
     // 偏好衰减得更慢：性格比事件稳定
-    salience: Math.max(0, (Number.isFinite(t.salience) ? t.salience : 0.5) * Math.pow(0.97, days)),
+    salience: Math.max(opts.salienceFloor, (Number.isFinite(t.salience) ? t.salience : 0.5) * Math.pow(0.97, days)),
   }));
 
   const grievances = (archive.relationship?.grievances ?? []).map((g) => {
-    const intensity = Math.max(0, (Number.isFinite(g.intensity) ? g.intensity : 0.5) * grudgeFactor);
+    const intensity = Math.max(opts.salienceFloor, (Number.isFinite(g.intensity) ? g.intensity : 0.5) * grudgeFactor);
     return { ...g, intensity, resolved: g.resolved === true || intensity < opts.grievanceForgiveBelow };
   });
 
