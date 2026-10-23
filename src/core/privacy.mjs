@@ -30,9 +30,31 @@ const SECRET_RULES = [
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, 'JWT'],
   [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/g, 'Bearer Token'],
   [
-    /\b(?:pass(?:wo?r?d)?|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key)\b\s*[:=]\s*["']?[^\s"',;]{6,}["']?/gi,
+    /\b(?:pass(?:wo?r?d)?|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key)\b\s*(?::|=|\bis\b|是|为)\s*["']?[^\s"',;]{6,}["']?/gi,
     '凭据',
   ],
+  // ── 中文键名 ──
+  //
+  // 审计报告（F2，P2）：上面那条只认英文键名，而这是个中文插件 ——
+  // README 承诺"密码……被替换成 [已拦截]"，可是这些写法全都放行：
+  //
+  //   服务器 root 密码是 Zx9!kq2#Lm7$Pw
+  //   WiFi 密码：hunter2pass2026
+  //   数据库口令 Hunter2pass
+  //   阿里云 AccessKey Secret 是 wJalrXUtn...
+  //   my password is Hunter2pass
+  //
+  // 中文没有 \b 词边界，所以单独一条规则，分隔符接受 : ： = 是 为 is。
+  [/(?:密码|口令|密钥|秘钥|验证码)\s*(?::|：|=|是|为|\bis\b)?\s*["']?[^\s"',;，。]{6,}["']?/g, '凭据'],
+  // 只写冒号、没有连接词的那种（"密码：xxx" 上面已覆盖，这条兜 Union 场景）
+  [/(?:密码|口令|密钥|秘钥)\s*[:：]\s*\S{6,}/g, '凭据'],
+  // ── URL 里内嵌的凭据 ──
+  //
+  // postgres://admin:Hunter2pass@db.internal:5432/app
+  //
+  // 原来这条"碰巧"被邮箱规则吃掉了（Hunter2pass@db.internal 像个邮箱），
+  // 换个 scheme 或者密码里没 @ 就漏。单独成规则才稳。
+  [/\/\/[^\/\s:@]+:[^@\s/]{4,}@/g, '凭据'],
 ];
 
 const SECRET_PLACEHOLDER = '[已拦截]';

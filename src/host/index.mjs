@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 肥鱼日记 · Host 半边
  *
  * 让新开一个对话，用户依然感觉是同一条鱼。
@@ -18,7 +18,7 @@
  *     我们的状态存在自己的档案文件里。
  */
 
-import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, readdir, rm } from 'node:fs/promises';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -179,6 +179,29 @@ async function readArchiveDir(dir) {
 async function writeArchiveDir(dir, files) {
   for (const f of files) {
     await writeFileAtomic(path.join(dir, f.name), f.data);
+  }
+
+  // ── 写完再清一遍：下不在清单里的月份文件删掉 ──
+  //
+  // archiveToFiles 只给"有条目的月份"产出文件。于是：
+  //
+  //   某月最后一条被「忘掉」→ 那个月不再有清单文件 → 旧 jsonl 没人覆盖
+  //   焚毁（清空所有）    → 一个月份都不产出 → 所有旧 jsonl 全留着
+  //
+  // 结果就是"内存 0 条，磁盘明文还在，重启读回来" —— 删除形同虚设。
+  //
+  // 写 = 让磁盘和内存一致。所以这里必须主动清掉多余的那个月。
+  // 只清 DIARY_DIR 下的 .jsonl：日记.md（渲染版）、手记.md、.bak-* 一律不碰。
+  const wanted = new Set(
+    files.filter((f) => f.name.startsWith(`${DIARY_DIR}/`)).map((f) => path.basename(f.name)),
+  );
+  const diaryDir = path.join(dir, DIARY_DIR);
+  if (!existsSync(diaryDir)) return;
+  for (const name of await readdir(diaryDir)) {
+    if (!name.endsWith('.jsonl')) continue;
+    if (wanted.has(name)) continue;
+    await rm(path.join(diaryDir, name), { force: true });
+    warn(`清掉多余的月份文件：${DIARY_DIR}/${name}（已经没有条目标了）`);
   }
 }
 
@@ -570,7 +593,14 @@ export function apply(ctx, rawConfig) {
       //   最近 MAX_NOTES 条 → 「我自己想的」（永远在场）
       //   更早的那些        → **加入召回池**，相关时能被想起来
       const allNotes = archive.diary.filter((e) => e?.kind === 'note');
-      const events = archive.diary
+      // 渲染兜底：老条目在写入时可能没洗过（feiyu_note 的漏洞修之前写进来的），
+  // 但它们照样会进系统提示。这里按**只拦密钥**再过一遍 —— 不开第三方泛化，
+  // 免得把历史日记里的人名都糊掉。
+  const safeEntry = (e) => {
+    const r = scrub(e.text, { thirdParty: false });
+    return r.blocked ? { ...e, text: r.text } : e;
+  };
+  const events = archive.diary.map(safeEntry)
       .filter((e) => e?.kind !== 'note')
       // 续写过的条目 created_at 没动，但它是"刚写过的" —— 排序得看 updated_at，
       // 否则刚补完的那条会按原始时间沉下去。
@@ -1236,7 +1266,16 @@ export function apply(ctx, rawConfig) {
         // 基线也要重设：替换之后"谁删过什么"那段历史就不成立了，
         // 不重设的话导入进来的老条目会被判成"别人删了它"。
         archive = { ...incoming, manifest: { ...incoming.manifest, deleted_ids: [] } };
-        loadedIds = new Set(archive.diary.map((e) => e.id));
+        // ⚠️ **基线要清空，不是设成导入的那些 id。**
+        //
+        // 基线的语义是「**加载时磁盘上有什么**」，合并靠它区分
+        // 「别人删了」和「我刚加的」。而 replace 之后磁盘上什么都没有 ——
+        // 导入的内容还在内存里，还没写下去。
+        //
+        // 设成导入的 id 会出事：persist() 里 mergeDiskEntries 读回一个空磁盘，
+        // 每个条目都命中「基线有它、磁盘没有它 → 别人删的」——**全丢**。
+        // 端到端测试（导出 → 焚毁 → 导入）就是这么红的。
+        loadedIds = new Set();
       } else {
         // merge 模式：并进来的东西同样要撤碑，不然"导入一个之前删过的条目"永远fail
         const incomingIds = new Set(incoming.diary.map((e) => e.id));
@@ -1325,8 +1364,52 @@ export function apply(ctx, rawConfig) {
     res.end(JSON.stringify(body));
   }
 
-  /** 读一个很小的 JSON 请求体。超过 8KB 直接拒 —— 我们只收 id */
+  /**
+   * 这个请求是不是同源来的。
+   *
+   * 判据两条，任一成立就算同源：
+   *   · `Origin` 的 host:port 等于请求的 `Host`
+   *   · `Sec-Fetch-Site` 是 `same-origin`
+   *
+   * 两个都没有（比如 curl）→ **拒**。面板自己发请求一定带 Origin，
+   * 所以拒掉"没有来源"的不会影响正常使用，但能挡住脚本乱打。
+   *
+   * 注意：GET（看状态）不设这条 —— 它只读，而且原来靠"不给 CORS 头"
+   * 已经让跨站页面读不到响应体了。真正要守的是写接口。
+   */
+  function isSameOrigin(req) {
+    const site = String(req.headers?.['sec-fetch-site'] ?? '').toLowerCase();
+    if (site === 'same-origin') return true;
+    const origin = String(req.headers?.origin ?? '');
+    const host = String(req.headers?.host ?? '');
+    if (origin === '' || host === '') return false;
+    try {
+      return new URL(origin).host === host;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 读一个很小的 JSON 请求体。超过 8KB 直接拒 —— 我们只收 id。
+   *
+   * ⚠️ **必须要求 `Content-Type: application/json`。**
+   *
+   * 审计报告（F3，P2）：原来这里不看 Content-Type 直接 JSON.parse。
+   * 于是跨站的 `text/plain` POST 能打进来 —— 按 CORS 规范，
+   * `text/plain` / `application/x-www-form-urlencoded` 属于「简单请求」，
+   * **浏览器不做预检就直接发出去**，服务端照常执行，只是页面读不到响应。
+   *
+   * 而日记 id 是 `d_YYYYMMDD_NN`，按日期枚举 01–99 就能逐条删光。
+   * 用户开着 dsh web 时访问一个恶意网页，记忆就没了 —— 而且没有确认环节。
+   *
+   * 要求 application/json 之后：跨站请求会触发预检，而预检会失败。
+   * 顺带把 Origin 也验一遍（双保险）。
+   */
   async function readPanelBody(req) {
+    const ct = String(req.headers?.['content-type'] ?? '').toLowerCase();
+    if (!ct.startsWith('application/json')) throw new Error('只接受 application/json');
+    if (!isSameOrigin(req)) throw new Error('跨站请求不予处理');
     const chunks = [];
     let size = 0;
     for await (const chunk of req) {
@@ -1426,6 +1509,7 @@ export function apply(ctx, rawConfig) {
           kind: 'exact',
           path: `${PANEL_BASE}/export`,
           handler: async (req, res) => {
+            if (!isSameOrigin(req)) return panelReply(res, 403, { ok: false, error: '跨站请求不予处理' });
             if (req.method !== 'GET') return panelReply(res, 405, { ok: false, error: 'method' });
             try {
               // 等到挂起的写盘落定，导出的是**磁盘上那份**档案
@@ -1539,17 +1623,34 @@ export function apply(ctx, rawConfig) {
             const raw = typeof args?.text === 'string' ? args.text.trim() : '';
             if (raw === '') throw new Error('要记什么？text 不能是空的。');
 
+            // ⚠️ **这里必须过隐私闸。**
+            //
+            // 审计报告（F1，P1）：`scrub()` 原来只在固化那条路调用，
+            // 而 feiyu_note 是"模型自己说一句、直接落盘"的写入口 ——
+            // 用户刚贴的 key、手机号、人名会被原样写进 diary/*.jsonl，
+            // 然后**每一轮都随系统提示发给模型 provider**。
+            //
+            // 这直接违背 README 那句「密钥硬拦……绝不入档」。
+            // 而且它不是边角场景：模型说"记一下这个 key"是很自然的动作。
+            const scrubbed = scrub(raw, {
+              thirdParty: config.thirdPartyRedaction !== false,
+              amountThreshold: config.amountThreshold,
+            });
+            if (scrubbed.blocked) {
+              log(`主动记的那条命中了密钥规则，已替换（${scrubbed.hits.length} 处）`);
+            }
             const now = Date.now();
             const tags = (Array.isArray(args?.tags) ? args.tags : [])
               .filter((t) => typeof t === 'string' && t.trim() !== '')
-              .map((t) => t.trim().slice(0, 12))
+              .map((t) => scrub(t.trim(), { thirdParty: false }).text.slice(0, 12))
               .slice(0, 4);
             if (tags.length === 0) tags.push('手记');
 
             const sessionId = exec?.agent?.id;
             const entry = normalizeDiaryEntry({
               id: makeDiaryId(now, archive.diary),
-              text: stripTimeWords(raw.slice(0, 400)),
+              // 洗过再截 —— 先截再洗会把半截密钥留在末尾
+              text: stripTimeWords(scrubbed.text.slice(0, 400)),
               tags,
               kind: 'note',
               // 主动写下的东西比自动筛出来的更该被想起来，给高一档

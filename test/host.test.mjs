@@ -203,13 +203,22 @@ function makeHarness(reply = GOOD_REPLY) {
     routes,
     tools,
     /** 驱动一条已注册的面板路由，模拟一次 HTTP 请求 */
-    async callRoute(routePath, { method = 'GET', body } = {}) {
+    async callRoute(routePath, { method = 'GET', body, headers } = {}) {
       const route = [...routes.values()].find((r) => r.path === routePath);
       if (route === undefined) throw new Error(`没有注册路由 ${routePath}（现有：${[...routes.keys()].join(', ')}）`);
       const req = (async function* gen() {
         if (body !== undefined) yield Buffer.from(JSON.stringify(body), 'utf8');
       })();
       req.method = method;
+      // 默认模拟**同源 + application/json** 的面板请求 ——
+      // 写接口现在要校验这两样（审计报告 F3：跨站 text/plain POST 能删光记忆）。
+      req.headers = {
+        'content-type': 'application/json',
+        origin: 'http://127.0.0.1:1234',
+        host: '127.0.0.1:1234',
+        'sec-fetch-site': 'same-origin',
+        ...(headers ?? {}),
+      };
       const res = {
         statusCode: 0,
         headers: {},
@@ -778,6 +787,54 @@ test('panel: POST /forget 真的删掉，界面上就没有了', async () => {
     const body = JSON.parse(after.body);
     assert.equal(body.count, 1);
     assert.ok(!body.diary.some((e) => e.id === target.id));
+  }, { seed: makeSeed() });
+});
+
+test('panel: 跨站 POST /forget 会被挡（Content-Type 不是 json）', async () => {
+  // 审计报告 F3：跨站的 text/plain POST 属于「简单请求」，浏览器不做预检就发，
+  // 服务端照常执行 —— 而日记 id 是 d_YYYYMMDD_NN，枚举一遍就能删光。
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const before = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    const target = before.diary[0];
+
+    const res = await h.callRoute('/feiyu-diary/forget', {
+      method: 'POST',
+      body: { id: target.id },
+      headers: {
+        'content-type': 'text/plain;charset=UTF-8',
+        origin: 'https://attacker.invalid',
+        host: '127.0.0.1:1234',
+        'sec-fetch-site': 'cross-site',
+      },
+    });
+
+    assert.notEqual(res.statusCode, 200, '跨站请求不能被当成正常请求');
+    const after = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    assert.equal(after.count, before.count, '一条都不能少');
+  }, { seed: makeSeed() });
+});
+
+test('panel: 同源但 Origin 不对 → 也挡（双保险）', async () => {
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const before = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    const target = before.diary[0];
+
+    const res = await h.callRoute('/feiyu-diary/forget', {
+      method: 'POST',
+      body: { id: target.id },
+      headers: {
+        'content-type': 'application/json',
+        origin: 'https://attacker.invalid',
+        host: '127.0.0.1:1234',
+        'sec-fetch-site': 'cross-site',
+      },
+    });
+
+    assert.notEqual(res.statusCode, 200);
+    const after = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    assert.equal(after.count, before.count);
   }, { seed: makeSeed() });
 });
 

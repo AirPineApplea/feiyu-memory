@@ -251,6 +251,26 @@ export function archiveFromFiles(entries, options = {}) {
 
   diary.sort((a, b) => a.created_at - b.created_at);
 
+  // ── 墓碑在这里也必须生效 ──
+  //
+  // 社区报的（这次比前两个严重）：焚毁 / 忘掉一条之后，内存里没了，
+  // **磁盘上那份 jsonl 没被重写** —— 于是重启一读，删掉的内容全回来了。
+  //
+  // 为什么之前只在 mergeArchives 里过滤：那个函数是"磁盘 + 内存"的三路合并，
+  // 它需要墓碑来判断"这条是我删的还是别人加的"。但**加载这一步不经过它** ——
+  // 启动时直接 archiveFromFiles(entries)，磁盘上有什么就读什么。
+  //
+  // 所以过滤要做两处：合并时一次，**读盘时也要一次**。
+  // （导入包依然是"先撤碑、再读"，见 importPack —— 那是用户明确要把东西拿回来。）
+  const tombstones = new Set(
+    Array.isArray(manifest.deleted_ids) ? manifest.deleted_ids.filter((x) => typeof x === 'string') : [],
+  );
+  const visible = tombstones.size > 0 ? diary.filter((e) => !tombstones.has(e.id)) : diary;
+  const resurrected = diary.length - visible.length;
+  if (resurrected > 0) {
+    warnings.push(`按墓碑跳过 ${resurrected} 条已删除的日记（它们还躺在磁盘上）`);
+  }
+
   return {
     archive: {
       manifest: {
@@ -259,7 +279,7 @@ export function archiveFromFiles(entries, options = {}) {
         updated_at: Number(manifest.updated_at) || now,
         last_seen_at: Number(manifest.last_seen_at) || 0,
         session_count: Number(manifest.session_count) || 0,
-        diary_count: diary.length,
+        diary_count: visible.length,
         generator: typeof manifest.generator === 'string' ? manifest.generator : 'feiyu-memory',
         // 墓碑必须活过一轮读写 —— 它靠的就是"删过的永不再来"。
         // 这里漏了它，落盘一次墓碑就没了，删除立刻开始复活。
@@ -270,7 +290,7 @@ export function archiveFromFiles(entries, options = {}) {
       persona: ensurePersonaStructure(persona),
       relationship: sanitizeRelationship(relationship),
       lexicon: { items: Array.isArray(lexicon.items) ? lexicon.items : [] },
-      diary,
+      diary: visible,
     },
     warnings,
   };
