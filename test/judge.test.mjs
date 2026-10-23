@@ -67,9 +67,9 @@ test('judge 组装: 只给这一轮那一句，不给整段对话', () => {
 test('judge 组装: 手记里的话作为补充判据塞进去', () => {
   const b = buildJudgeInput({
     lastUserText: '随便说一句',
-    handNotes: ['叫我凤梨就行'],
+    handNotes: ['叫我老陈就行'],
   });
-  assert.ok(b.system.includes('叫我凤梨就行'));
+  assert.ok(b.system.includes('叫我老陈就行'));
   assert.ok(b.system.includes('补充'), '要标明那是补充，不是本体');
 });
 
