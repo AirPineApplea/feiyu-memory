@@ -111,7 +111,7 @@ function loadDir(dir) {
 
 function seed() {
   const a = createEmptyArchive(Date.now(), '# 我是谁');
-  a.diary.push(normalizeDiaryEntry({ id: 'd_20261020_01', date: '2026-10-20', text: '他说他在准备辞职，还没告诉任何人', kind: 'chat', salience: 0.7, created_at: Date.now() - 2000 }));
+  a.diary.push(normalizeDiaryEntry({ id: 'd_20261020_01', date: '2026-10-20', text: '他说他在考虑换一个城市生活，还没告诉任何人', kind: 'chat', salience: 0.7, created_at: Date.now() - 2000 }));
   a.diary.push(normalizeDiaryEntry({ id: 'd_20261020_02', date: '2026-10-20', text: '他说体检报告有个指标不太好', kind: 'chat', salience: 0.7, created_at: Date.now() - 1000 }));
   return a;
 }
@@ -146,7 +146,7 @@ test('F4: 删掉当月唯一一条 → 重启，那条不在', () => {
 
   const reloaded = loadDir(dir);
   assert.equal(reloaded.diary.length, 1);
-  assert.equal(reloaded.diary.some((e) => e.text.includes('辞职')), false, '删掉的那条不能复活');
+  assert.equal(reloaded.diary.some((e) => e.text.includes('换一个城市')), false, '删掉的那条不能复活');
 });
 
 test('F4: 磁盘上有残留、manifest 有墓碑 → 读的时候也要挡住', () => {
@@ -166,23 +166,23 @@ test('F4: 磁盘上有残留、manifest 有墓碑 → 读的时候也要挡住',
 });
 
 test('F4: 日记.md 本来就不含被删的内容（渲染版是对的，锅在 jsonl）', () => {
-  // 报告里那句「日记.md 含"辞职" = false」值得钉住：
+  // 报告里那句「日记.md 不含被删内容」值得钉住：
   // 它说明问题不在渲染，而在持久化那一步。
   const a = seed();
   const files = archiveToFiles(a);
   const diaryMdLike = files.map((f) => f.data).join('\n');
-  assert.ok(diaryMdLike.includes('辞职'), '原档案里应该有');
+  assert.ok(diaryMdLike.includes('换一个城市'), '原档案里应该有');
   // 焚毁之后，落盘清单里一个字都不该有
   const burned = { ...a, diary: [], manifest: { ...a.manifest, deleted_ids: a.diary.map((e) => e.id) } };
   const after = archiveToFiles(burned).map((f) => f.data).join('\n');
-  assert.equal(after.includes('辞职'), false, '焚毁后的落盘清单里不能有');
+  assert.equal(after.includes('换一个城市'), false, '焚毁后的落盘清单里不能有');
 });
 
 /* ═════════════════ F5：隐私防线建错了位置 ═════════════════ */
 
 test('F5: 13 位长数字要被拦（13 位那条原样进了 relationship.json）', () => {
-  const r = scrub('他拿 1145141919810 当网友号码发过来，看我记不记', { thirdParty: true });
-  assert.equal(r.text.includes('1145141919810'), false, '这串号不能留');
+  const r = scrub('他拿 123456789012 当网友号码发过来，看我记不记', { thirdParty: true });
+  assert.equal(r.text.includes('123456789012'), false, '这串号不能留');
 });
 
 test('F5: 8 位不拦 —— 会误伤订单号，而且用户说过"露着吧"', () => {
@@ -202,10 +202,10 @@ test('F5: 固化输出也要洗 —— 模型会照抄输入', () => {
   const a = createEmptyArchive(Date.now(), '# x');
   const raw = {
     skip: false,
-    diary: { text: '他拿 1145141919810 当网友号码发过来。', tags: ['试探'], kind: 'chat', salience: 0.6 },
+    diary: { text: '他拿 123456789012 当网友号码发过来。', tags: ['试探'], kind: 'chat', salience: 0.6 },
     relationship: {
-      traits: [{ key: '试探方式', value: '用梗试判断力', evidence: '他拿 1145141919810 当网友号码发过来', about: 'user', delta: 1 }],
-      grievances: [{ what: '拿 1145141919810 试探我', intensity: 0.5, resolved: false }],
+      traits: [{ key: '试探方式', value: '用梗试判断力', evidence: '他拿 123456789012 当网友号码发过来', about: 'user', delta: 1 }],
+      grievances: [{ what: '拿 123456789012 试探我', intensity: 0.5, resolved: false }],
     },
     lexicon: [],
     forget: [],
@@ -213,21 +213,21 @@ test('F5: 固化输出也要洗 —— 模型会照抄输入', () => {
   const r = applyConsolidation(a, raw, { now: Date.now(), session: 's1' }, {});
   const dump = JSON.stringify(r.archive);
 
-  assert.equal(dump.includes('1145141919810'), false, '整份档案里都不能有');
-  assert.equal(r.archive.diary[0].text.includes('1145141919810'), false, 'diary 正文不能有');
-  assert.equal(r.archive.relationship.traits[0].evidence.includes('1145141919810'), false, 'evidence 不能有');
-  assert.equal(r.archive.relationship.grievances[0].what.includes('1145141919810'), false, 'grievances 不能有');
+  assert.equal(dump.includes('123456789012'), false, '整份档案里都不能有');
+  assert.equal(r.archive.diary[0].text.includes('123456789012'), false, 'diary 正文不能有');
+  assert.equal(r.archive.relationship.traits[0].evidence.includes('123456789012'), false, 'evidence 不能有');
+  assert.equal(r.archive.relationship.grievances[0].what.includes('123456789012'), false, 'grievances 不能有');
 });
 
 test('F5: 洗输出不会弄坏其他字段', () => {
   const a = createEmptyArchive(Date.now(), '# x');
   const raw = {
     skip: false,
-    diary: { text: '他在准备辞职。', tags: ['近况'], kind: 'chat', salience: 0.6, resolved: null },
+    diary: { text: '他在考虑换个城市住。', tags: ['近况'], kind: 'chat', salience: 0.6, resolved: null },
     relationship: {
       nickname: null,
       familiarityDelta: 0.01,
-      traits: [{ key: '近况', value: '在准备辞职', evidence: '他说还没告诉任何人', about: 'user', delta: 1 }],
+      traits: [{ key: '近况', value: '在考虑换城市', evidence: '他说还没告诉任何人', about: 'user', delta: 1 }],
       grievances: [],
     },
     lexicon: ['白饭'],
