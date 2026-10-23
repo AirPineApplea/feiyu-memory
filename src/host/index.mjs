@@ -110,9 +110,25 @@ function dshHome() {
  * 环境变量中途变了（多实例、测试并发、用户改配置），
  * 档案就会写到另一个目录去，而且没有任何报错。
  */
-function resolveArchiveDir(config) {
-  const explicit = typeof config?.dataDir === 'string' ? config.dataDir.trim() : '';
-  return explicit !== '' ? path.resolve(explicit) : path.join(dshHome(), 'feiyu-diary');
+export function resolveArchiveDir(config, home = dshHome()) {
+  // ⚠️ **只认绝对路径的字符串。**
+  //
+  // 社区报的（DSH Desktop 0.2.1-rc.2）：某些情况下 config.dataDir 会是一个
+  // 被字符串化的对象 —— 字面量 "[object Object]"。
+  //
+  //   typeof 检查 → 它是 string，放行
+  //   path.resolve("[object Object]") → 以进程 CWD 为基准
+  //   桌面端的 CWD = profiles\\desktop
+  //   → 档案落进 profiles\\desktop\\[object Object]\\
+  //
+  // 后果比崩了还糟：插件一切正常，人格注入在跑、feiyu_note 能用，
+  // 只是用户改 ~/.dsh/feiyu-diary/persona.md 完全无效 —— 而且全程无报错。
+  //
+  // 所以：不是绝对路径就回落到默认。相对路径本来也不该出现在配置里
+  // （基准是进程 CWD，用户不可能预测它是什么）。
+  const raw = config?.dataDir;
+  const explicit = typeof raw === 'string' && path.isAbsolute(raw.trim()) ? raw.trim() : '';
+  return explicit !== '' ? explicit : path.join(home, 'feiyu-diary');
 }
 
 const DIARY_FILE_RE = /\.jsonl$/;
@@ -176,6 +192,11 @@ export function apply(ctx, rawConfig) {
   const config = resolveConfig(rawConfig);
   /** 档案目录：在 apply 时一次算定，之后全程不变 */
   const archiveDirectory = resolveArchiveDir(config);
+  // 一行说清"档案到底落在哪"，**不受 debugLog 管**。
+  //
+  // 社区那个 [object Object] 的 bug：五秒钟的事，因为没有一行输出，
+  // 用户只能靠翻文件系统发现。这行值得一直在。
+  ctx.logger?.info?.(`[feiyu-memory] 档案目录：${archiveDirectory}`);
   /** 当前档案（内存副本，写盘后保持一致） */
   let archive = createEmptyArchive(Date.now());
   /**

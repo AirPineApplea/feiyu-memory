@@ -1,4 +1,32 @@
-# 更新日志
+﻿# 更新日志
+
+## 未发布
+
+### 修 — 档案写进 `[object Object]` 目录（社区报的）
+
+> 报告来源：B 站一位朋友，附了完整的环境、定位、复现和建议。**报告质量很高。**
+
+**现象**：`~/.dsh/feiyu-diary/` 一直不产生档案，但插件一切正常 —— 人格注入在跑、`feiyu_note` 能用、日志里没有任何报错。
+
+**实际位置**：`profiles/desktop/[object Object]/`
+
+**原因**：某些情况下 `config.dataDir` 是一个被字符串化的对象，字面量 `"[object Object]"`。
+
+```js
+typeof 检查 → 它是 string，放行
+path.resolve("[object Object]") → 以进程 CWD 为基准
+桌面端 CWD = profiles\\desktop
+→ 档案落进 profiles\\desktop\\[object Object]\\
+```
+
+**后果比崩了还糟**：用户改 `~/.dsh/feiyu-diary/persona.md` 完全无效，`手记.md` 也读的是错目录那份 —— 而且没有任何提示。
+
+**修法**（采纳了报告的建议一）：
+
+- 只接受**绝对路径**的字符串，否则回落到 `~/.dsh/feiyu-diary`。相对路径本来也不该出现在配置里 —— 基准是进程 CWD，用户不可能预测。
+- 启动时用 `logger.info` 打一行最终档案目录，**不受 `debugLog` 管**。这次要是有这行，五秒钟就能定位。
+
+**加防**：7 条测试专盯这条线（`"[object Object]"` / 相对路径 / 非字符串一律回落）。
 
 这个项目按 [语义化版本](https://semver.org/lang/zh-CN/) 走。
 每次发版前请跑 `npm run doctor` —— 它会替你确认文档里的数字跟实际对不对得上。
