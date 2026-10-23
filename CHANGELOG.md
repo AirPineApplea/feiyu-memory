@@ -1,5 +1,65 @@
 # 更新日志
 
+## 未发布
+
+> ⚠️ **这一版不发布，等用户用一周再定。** 只本地提交。
+
+### 修 — 配置根本传不进插件（`Config` 是 `undefined`）
+
+> 报告来源：GitHub issue。**这份比前一份深一层 —— 前一份是现象，这是根因。**
+
+**现象**：装完 `~/.dsh/feiyu-diary/` 一直是空目录，插件看起来一切正常 ——
+注入区在、`/feiyu-diary/state` 返回 `ok:true`、`feiyu_note` 每次都回「记住了」。
+实际档案写到了 `profiles/desktop/[object Object]/`。
+
+**报告的关键读数**：在 `apply` 里打探针，`rawConfig` 的每个字段都是**空对象 `{}`** ——
+不是空字符串。于是：
+
+```
+coerce() 的 string 分支  String({}) → "[object Object]"
+resolveArchiveDir() 当路径用  path.resolve 按进程 cwd 解析
+桌面端 cwd 正好是 profiles/desktop → 档案就落在那里
+```
+
+`debugLog` 是 boolean，`{}` 也走不到 `true` —— **开着 debugLog 也看不到日志**，
+这让排查多绕了一轮。
+
+**更深的根因**（这才是这份报告最值钱的地方）：`Config` 在拿不到 schemastery 时
+导出 `undefined`。代码注释里写着「loader 会跳过校验，所有选项照样能在
+`cordis.patch.yml` 里写」—— **那条假设是错的**。实际是 DSH 传一份空模板，
+**用户改的任何配置都不生效**。铁证：`cordis.patch.yml` 里显式写
+`config: { debugLog: true }`，传进来还是 `{}`。
+
+**为什么拿不到 schemastery**：原来是 `createRequire(import.meta.url)`，
+从「插件自己所在的位置」解析。pnpm 把包装进 `.pnpm/<pkg>@<ver>/node_modules/`，
+`import.meta.url` 指向那个真实路径，外面没有 schemastery；`link:` 安装更直接 ——
+插件在 D 盘、schemastery 在 profile 里，隔了十万八千里。
+
+实测：从 `D:\肥鱼日记` require 失败；从 `profile/` require 成功（v3.18.4）。
+
+**三层修法**：
+
+1. **`loadSchemastery()` 多试几个基准** —— 插件位置、`process.cwd()`、
+   `DSH_HOME` 下每个 profile。拿到真 schema 就用真的。
+2. **拿不到时兜一个纯 JS 的 `buildPlainSchema()`** —— 可调用、有 `.dict`、
+   有 `toString`。关键只有一件事：**让 loader 知道这台插件有哪些字段**，
+   于是它会把 `config:` 原样传进来，而不是传空模板。**`Config` 永远不会是 `undefined`。**
+3. **`persist()` 连续写失败 3 次 → `degraded` 置真**。原来 `.catch(warn)` 一吞，
+   工具照样返回「记住了」。这次这个坑是"写成功了但写错地方"，捕获救不了 ——
+   但**真的写失败**时用户也同样只看到「记住了」。现在面板上能看出来。
+
+### 验
+
+296 项测试全过，新增 9 项（`test/config-source.test.mjs`）：
+
+- 报告里那份空模板喂进去，**一个 `[object Object]` 都不能出现**
+- string / number / boolean 全部回默认（`debugLog` 尤其重要）
+- **`Config` 不能是 `undefined`**（是的话 DSH 就传空模板）
+- `Config({dataDir, debugLog, budgetTokens})` 喂进去的配置**必须原样生效**
+- `.dict` 字段数跟 `CONFIG_SPEC` 对得上；`toString` 能打出每个字段
+- 组合：空模板 + `resolveArchiveDir` → 回默认目录，不是 `[object Object]`
+
+---
 ## v0.3.2 — 2026-10-24
 
 ### 修 — 安全审计的四条（两条 P1 直接推翻 README 的隐私承诺）
@@ -77,7 +137,7 @@ same-origin`）；`/export` 也校验。GET 不设这条 —— 它只读。
 
 ### 验
 
-287 项测试全过，新增 18 项：`test/security.test.mjs` 14 项（F2 九条样本 +
+296 项测试全过，新增 18 项：`test/security.test.mjs` 14 项（F2 九条样本 +
 日常话不误伤、F1 原文洗完干净、F4 焚毁/单条删除/墓碑兜底/渲染版），
 `test/host.test.mjs` 4 项（面板路由带同源头 + 两条跨站反例）。
 

@@ -57,7 +57,7 @@ import {
   ConsolidationParseError,
   DEFAULT_CONSOLIDATION,
 } from '../core/consolidate.mjs';
-import { resolveConfig, buildSchema } from '../core/config.mjs';
+import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 
 /** Cordis 插件身份。模块上只有这四个属性会被读取。 */
 export const name = 'feiyu-memory';
@@ -67,6 +67,77 @@ export const name = 'feiyu-memory';
  * 少一个记忆插件，不能影响用户聊天。
  */
 export const inject = ['systemPrompt', 'agents', 'sessions', 'llm'];
+
+/**
+ * 找 schemastery。**多试几个基准**，不能只认 `import.meta.url`。
+ *
+ * 原因：pnpm 把包装进 `.pnpm/<pkg>@<ver>/node_modules/<pkg>/`，`import.meta.url`
+ * 指向那个真实路径，而它外面的 node_modules 里**没有** `@deepseek-ai/schemastery`。
+ * `link:` 安装更直接 —— 插件在 D 盘，schemastery 在 profile 里，隔了十万八千里。
+ *
+ * 实测：从 `D:\肥鱼日记` require 失败，从 `profile/` require 成功。
+ */
+function loadSchemastery() {
+  const bases = [];
+  // 1) 插件自己所在的位置（正常 npm 安装时这条就够了）
+  try { bases.push(import.meta.url); } catch { /* 忽略 */ }
+  // 2) DSH profile 目录 —— 桌面端的 cwd 通常就是它
+  try { bases.push(path.join(process.cwd(), 'package.json')); } catch { /* 忽略 */ }
+  // 3) DSH_HOME 下面每个 profile
+  try {
+    const home = dshHome();
+    const profiles = path.join(home, 'profiles');
+    if (existsSync(profiles)) {
+      for (const name of readdirSync(profiles)) {
+        bases.push(path.join(profiles, name, 'package.json'));
+      }
+    }
+    bases.push(path.join(home, 'package.json'));
+  } catch { /* 忽略 */ }
+
+  for (const base of bases) {
+    try {
+      const require = createRequire(base);
+      const mod = require('@deepseek-ai/schemastery');
+      const z = mod?.default ?? mod;
+      if (z !== undefined && z !== null && typeof z.object === 'function') return z;
+    } catch { /* 换下一个基准 */ }
+  }
+  return undefined;
+}
+
+/**
+ * 没有 schemastery 时的兜底 schema。
+ *
+ * 关键只有一件事：**让 loader 知道这台插件有哪些字段**，于是它会把
+ * `cordis.patch.yml` 里的 `config:` 原样传进来，而不是传一份空模板。
+ *
+ * 形状上模拟 schemastery 的最小子集：
+ *   · 可调用 —— `Config(dict)` 返回补过默认值的普通对象
+ *   · `.dict` —— 字段定义（有些界面代码会读它）
+ *   · `.toString()` —— 给设置表单的展示用
+ */
+function buildPlainSchema() {
+  const dict = {};
+  for (const f of CONFIG_SPEC) {
+    dict[f.key] = {
+      type: f.type,
+      description: typeof f.label === 'string' ? f.label : '',
+      default: f.default,
+      ...(Number.isFinite(f.min) ? { min: f.min } : {}),
+      ...(Number.isFinite(f.max) ? { max: f.max } : {}),
+    };
+  }
+
+  const schema = function (input) {
+    return resolveConfig(input);
+  };
+  schema.dict = dict;
+  schema.meta = { description: '肥鱼日记 · 配置' };
+  schema.toString = () =>
+    CONFIG_SPEC.map((f) => `${f.key}: ${f.type} = ${JSON.stringify(f.default)}`).join('\n');
+  return schema;
+}
 
 /**
  * Config **是可选的**。
@@ -82,15 +153,21 @@ export const inject = ['systemPrompt', 'agents', 'sessions', 'llm'];
  * 代价：拿不到 schemastery 时，v0.2 的自动设置表单不会出现。
  */
 export const Config = (() => {
-  try {
-    const require = createRequire(import.meta.url);
-    const mod = require('@deepseek-ai/schemastery');
-    const z = mod?.default ?? mod;
-    if (z !== undefined && z !== null && typeof z.object === 'function') return buildSchema(z);
-  } catch {
-    // 拿不到就没有表单，不影响任何功能
-  }
-  return undefined;
+  const z = loadSchemastery();
+  if (z !== undefined) return buildSchema(z);
+
+  // ⚠️ **拿不到 schemastery 时不能返回 undefined。**
+  //
+  // 原来这里直接吞掉并导出 undefined，注释里写着「loader 会跳过校验」。
+  // **那条假设是错的** —— 社区报告实测：没有 Config 时 DSH 会传一份**空模板**
+  // （每个字段都是 `{}`），于是 `resolveConfig` 全部回落默认，
+  // **用户改的任何配置都不生效**。铁证是：`cordis.patch.yml` 里显式写
+  // `config: { debugLog: true }`，传进来还是 `{}` —— 那不是插件没读，是 DSH 没传。
+  //
+  // 所以这里兜一个**纯 JS 的形状等价物**。它只需要满足 loader 对 Config 的
+  // 两个用法：`Config(dict)` 做校验/补默认，以及 `Config.toString()` / `.dict`
+  // 之类的展示。没有 schemastery 的链式 API，就手写一个最小的。
+  return buildPlainSchema();
 })();
 
 /* ───────────────────────── 小工具 ───────────────────────── */
@@ -522,6 +599,9 @@ export function apply(ctx, rawConfig) {
     }
   }
 
+  /** 连续写盘失败次数 —— 到 3 次就把 degraded 置真，让面板能看出来 */
+  let writeFailures = 0;
+
   function persist() {
     if (!ready) return writeChain;
     writeChain = writeChain
@@ -537,7 +617,26 @@ export function apply(ctx, rawConfig) {
         await writeReadableDiary(merged);
       })
       .catch((err) => {
-        warn(`写档案失败：${err instanceof Error ? err.message : String(err)}`);
+        // ⚠️ **连续写盘失败要让面板看得出来。**
+        //
+        // 原来这里只 warn 一句就吞掉，工具照样返回"记住了"。
+        // 社区报告点了一句：这次这个坑是"写成功了但写错地方"，所以捕获救不了 ——
+        // 但**真的写失败**的时候，用户同样只会看到「记住了」。
+        //
+        // 所以：连续 3 次失败就把 degraded 置真，面板上会显示"档案读不了"。
+        // 一次失败可能只是临时占用，不值得惊动用户。
+        writeFailures += 1;
+        warn(
+          `写档案失败（连续第 ${writeFailures} 次）：${err instanceof Error ? err.message : String(err)}`,
+        );
+        if (writeFailures >= 3 && !degraded) {
+          degraded = true;
+          warn('档案连续写失败 3 次，标记为降级 —— 面板上会显示出来');
+        }
+      })
+      .then(() => {
+        // 成功一次就把计数清零：一次失败不该永久挂着
+        writeFailures = 0;
       });
     return writeChain;
   }
