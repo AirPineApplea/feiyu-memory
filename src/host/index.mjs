@@ -83,7 +83,24 @@ function loadSchemastery() {
   try { bases.push(import.meta.url); } catch { /* 忽略 */ }
   // 2) DSH profile 目录 —— 桌面端的 cwd 通常就是它
   try { bases.push(path.join(process.cwd(), 'package.json')); } catch { /* 忽略 */ }
-  // 3) DSH_HOME 下面每个 profile
+  // 3) **DSH 自己的安装目录** —— schemastery 真正的主人
+  //
+  // 端到端验出来的：临时 profile 里根本没装 schemastery，它是 DSH 的依赖。
+  // 所以要从 dsh CLI 的位置往上找。
+  try {
+    const argv1 = process.argv[1];
+    if (typeof argv1 === 'string' && argv1 !== '') {
+      let dir = path.dirname(argv1);
+      for (let i = 0; i < 8; i++) {
+        bases.push(path.join(dir, 'package.json'));
+        const next = path.dirname(dir);
+        if (next === dir) break;
+        dir = next;
+      }
+    }
+  } catch { /* 忽略 */ }
+
+  // 4) DSH_HOME 下面每个 profile
   try {
     const home = dshHome();
     const profiles = path.join(home, 'profiles');
@@ -133,6 +150,14 @@ function buildPlainSchema() {
     return resolveConfig(input);
   };
   schema.dict = dict;
+  // ⚠️ **cordis 会调 `.validate()`**，不是只调函数本身。
+  //
+  // 这条是端到端验出来的：我第一版只给了可调用 + .dict + .toString，
+  // 一装进真 profile 就报
+  //   TypeError: Cannot read properties of undefined (reading 'validate')
+  //   at resolveConfig (cordis/lib/index.js:958)
+  // 插件整个没激活。**单元测试碰不到这层 —— 这就是"必须真跑一遍"的理由。**
+  schema.validate = (input) => resolveConfig(input);
   schema.meta = { description: '肥鱼日记 · 配置' };
   schema.toString = () =>
     CONFIG_SPEC.map((f) => `${f.key}: ${f.type} = ${JSON.stringify(f.default)}`).join('\n');

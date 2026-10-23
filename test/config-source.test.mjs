@@ -99,3 +99,24 @@ test('组合: 空模板 + resolveArchiveDir → 回默认目录，不是 [object
   assert.equal(dir, path.join(home, 'feiyu-diary'));
   assert.equal(dir.includes('[object Object]'), false);
 });
+
+test('Config: 必须有 .validate —— cordis 是调它，不是调函数本身', () => {
+  // ⚠️ 这条是端到端验出来的，不是想出来的。
+  //
+  // 第一版兜底 schema 只有：可调用 + .dict + .toString。
+  // 301 项单元测试全绿，装进真 profile 之后：
+  //
+  //   TypeError: Cannot read properties of undefined (reading 'validate')
+  //   at resolveConfig (cordis/lib/index.js:958)
+  //
+  // 插件整个没激活。**单元测试碰不到这一层。**
+  assert.equal(typeof Config.validate, 'function', '缺 validate 的话插件根本起不来');
+  const v = Config.validate({ dataDir: '/a/b', debugLog: true });
+  assert.equal(v.dataDir, '/a/b');
+  assert.equal(v.debugLog, true);
+});
+
+test('Config: validate 和直接调用结果一致', () => {
+  const input = { dataDir: '/x', budgetTokens: 1234, enabled: false };
+  assert.deepEqual(Config.validate(input), Config(input));
+});

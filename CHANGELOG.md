@@ -37,7 +37,7 @@
    手机号规则管（变成 `[手机号]`），这条先跑会把它吃掉，测试抓到过
 3. 8 位**不拦**：会误伤订单号、编号，而且用户明确说过"露着吧"
 
-**验**：301 项测试全过，新增 5 项 ——
+**验**：303 项测试全过，新增 5 项 ——
 13 位要拦 / 8 位不误伤 / 11 位仍走手机号规则 / 固化输出全字段都洗 /
 洗输出不弄坏其他字段（kind、salience、about、lexicon 都还在）。
 
@@ -88,7 +88,7 @@ resolveArchiveDir() 当路径用  path.resolve 按进程 cwd 解析
 
 ### 验
 
-301 项测试全过，新增 9 项（`test/config-source.test.mjs`）：
+303 项测试全过，新增 9 项（`test/config-source.test.mjs`）：
 
 - 报告里那份空模板喂进去，**一个 `[object Object]` 都不能出现**
 - string / number / boolean 全部回默认（`debugLog` 尤其重要）
@@ -175,7 +175,7 @@ same-origin`）；`/export` 也校验。GET 不设这条 —— 它只读。
 
 ### 验
 
-301 项测试全过，新增 18 项：`test/security.test.mjs` 14 项（F2 九条样本 +
+303 项测试全过，新增 18 项：`test/security.test.mjs` 14 项（F2 九条样本 +
 日常话不误伤、F1 原文洗完干净、F4 焚毁/单条删除/墓碑兜底/渲染版），
 `test/host.test.mjs` 4 项（面板路由带同源头 + 两条跨站反例）。
 
