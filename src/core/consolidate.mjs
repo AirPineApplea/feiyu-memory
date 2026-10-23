@@ -11,6 +11,7 @@
  */
 
 import { extractKeywords } from './keywords.mjs';
+import { scrub } from './privacy.mjs';
 // 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
 // LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
 // 这三个名字跟着一起没了（留着就是死引用）。
@@ -366,7 +367,69 @@ export function makeDiaryId(now, existing) {
  * @param {object} [options]
  * @returns {{archive: object, notes: string[], accepted: boolean, reason?: string}}
  */
-export function applyConsolidation(archive, parsed, context = {}, options = {}) {
+/**
+ * 把模型产出的每一条文本都过一遍 `scrub()`，然后再落盘。
+ *
+ * ⚠️ **这是隐私防线的最后一道，不是第一道。**
+ *
+ * 社区报告（2026-10-24）指出的漏洞：固化**输入**是洗过的（发给模型的
+ * transcript 干净），但**输出没洗** —— 模型会照抄输入里的敏感片段，
+ * 写进 `traits.evidence` / `diary.text` / `grievances.what`。
+ * 那次是一串 13 位号码躺进了 relationship.json，而我这条鱼压根不知道它进去了。
+ *
+ * **"我写不写"只是最前面一道闸。档案里大部分内容是模型生成的，
+ * 那条路原来一条闸都没有。**
+ */
+function scrubParsed(parsed, options) {
+  if (parsed === null || typeof parsed !== 'object') return parsed;
+  const opts = {
+    thirdParty: options.thirdPartyRedaction !== false,
+    amountThreshold: options.amountThreshold,
+  };
+  const wash = (v) => (typeof v === 'string' ? scrub(v, opts).text : v);
+
+  const out = { ...parsed };
+
+  if (out.diary !== null && typeof out.diary === 'object') {
+    const d = { ...out.diary };
+    if (typeof d.text === 'string') d.text = wash(d.text);
+    if (typeof d.append === 'string') d.append = wash(d.append);
+    if (Array.isArray(d.tags)) d.tags = d.tags.map(wash);
+    out.diary = d;
+  }
+
+  const rel = out.relationship;
+  if (rel !== null && typeof rel === 'object') {
+    const r = { ...rel };
+    if (Array.isArray(r.traits)) {
+      r.traits = r.traits.map((t) => {
+        if (t === null || typeof t !== 'object') return t;
+        return {
+          ...t,
+          ...(typeof t.value === 'string' ? { value: wash(t.value) } : {}),
+          ...(typeof t.evidence === 'string' ? { evidence: wash(t.evidence) } : {}),
+          ...(typeof t.key === 'string' ? { key: wash(t.key) } : {}),
+        };
+      });
+    }
+    if (Array.isArray(r.grievances)) {
+      r.grievances = r.grievances.map((g) => {
+        if (g === null || typeof g !== 'object') return g;
+        return { ...g, ...(typeof g.what === 'string' ? { what: wash(g.what) } : {}) };
+      });
+    }
+    if (typeof r.nickname === 'string') r.nickname = wash(r.nickname);
+    out.relationship = r;
+  }
+
+  if (Array.isArray(out.lexicon)) out.lexicon = out.lexicon.map(wash);
+
+  return out;
+}
+
+export function applyConsolidation(archive, rawParsed, context = {}, options = {}) {
+  // 先洗再落 —— 模型会照抄输入，输入干净不等于输出干净
+  const parsed = scrubParsed(rawParsed, options);
   const opts = { ...DEFAULT_CONSOLIDATION, ...options };
   const now = Number.isFinite(context.now) ? context.now : Date.now();
   /** @type {string[]} */

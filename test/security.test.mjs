@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { scrub } from '../src/core/privacy.mjs';
+import { applyConsolidation } from '../src/core/consolidate.mjs';
 import {
   archiveToFiles,
   archiveFromFiles,
@@ -175,4 +176,67 @@ test('F4: 日记.md 本来就不含被删的内容（渲染版是对的，锅在
   const burned = { ...a, diary: [], manifest: { ...a.manifest, deleted_ids: a.diary.map((e) => e.id) } };
   const after = archiveToFiles(burned).map((f) => f.data).join('\n');
   assert.equal(after.includes('辞职'), false, '焚毁后的落盘清单里不能有');
+});
+
+/* ═════════════════ F5：隐私防线建错了位置 ═════════════════ */
+
+test('F5: 13 位长数字要被拦（13 位那条原样进了 relationship.json）', () => {
+  const r = scrub('他拿 1145141919810 当网友号码发过来，看我记不记', { thirdParty: true });
+  assert.equal(r.text.includes('1145141919810'), false, '这串号不能留');
+});
+
+test('F5: 8 位不拦 —— 会误伤订单号，而且用户说过"露着吧"', () => {
+  for (const t of ['订单号 12345678', '内部编号 87654321']) {
+    assert.equal(scrub(t, { thirdParty: true }).text, t, '不该动：' + t);
+  }
+});
+
+test('F5: 11 位还是走手机号规则，不能被长数字规则抢走', () => {
+  // 这条是"新规则抢在手机号规则前面把它吃了"那个坑的回归
+  const r = scrub('我朋友手机 13812345678', { thirdParty: true });
+  assert.ok(r.text.includes('[手机号]'), '应该还是 [手机号]，实际：' + r.text);
+});
+
+test('F5: 固化输出也要洗 —— 模型会照抄输入', () => {
+  // 关键：输入洗过不等于输出干净。模型复述了一遍，写进 traits.evidence。
+  const a = createEmptyArchive(Date.now(), '# x');
+  const raw = {
+    skip: false,
+    diary: { text: '他拿 1145141919810 当网友号码发过来。', tags: ['试探'], kind: 'chat', salience: 0.6 },
+    relationship: {
+      traits: [{ key: '试探方式', value: '用梗试判断力', evidence: '他拿 1145141919810 当网友号码发过来', about: 'user', delta: 1 }],
+      grievances: [{ what: '拿 1145141919810 试探我', intensity: 0.5, resolved: false }],
+    },
+    lexicon: [],
+    forget: [],
+  };
+  const r = applyConsolidation(a, raw, { now: Date.now(), session: 's1' }, {});
+  const dump = JSON.stringify(r.archive);
+
+  assert.equal(dump.includes('1145141919810'), false, '整份档案里都不能有');
+  assert.equal(r.archive.diary[0].text.includes('1145141919810'), false, 'diary 正文不能有');
+  assert.equal(r.archive.relationship.traits[0].evidence.includes('1145141919810'), false, 'evidence 不能有');
+  assert.equal(r.archive.relationship.grievances[0].what.includes('1145141919810'), false, 'grievances 不能有');
+});
+
+test('F5: 洗输出不会弄坏其他字段', () => {
+  const a = createEmptyArchive(Date.now(), '# x');
+  const raw = {
+    skip: false,
+    diary: { text: '他在准备辞职。', tags: ['近况'], kind: 'chat', salience: 0.6, resolved: null },
+    relationship: {
+      nickname: null,
+      familiarityDelta: 0.01,
+      traits: [{ key: '近况', value: '在准备辞职', evidence: '他说还没告诉任何人', about: 'user', delta: 1 }],
+      grievances: [],
+    },
+    lexicon: ['白饭'],
+    forget: [],
+  };
+  const r = applyConsolidation(a, raw, { now: Date.now(), session: 's1' }, {});
+  assert.equal(r.accepted, true, '正常的日记不该被洗坏');
+  assert.equal(r.archive.diary[0].kind, 'chat');
+  assert.equal(r.archive.diary[0].salience, 0.6);
+  assert.equal(r.archive.relationship.traits[0].about, 'user');
+  assert.ok(Array.isArray(r.archive.lexicon.items));
 });
