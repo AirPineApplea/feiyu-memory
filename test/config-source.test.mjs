@@ -120,3 +120,36 @@ test('Config: validate 和直接调用结果一致', () => {
   const input = { dataDir: '/x', budgetTokens: 1234, enabled: false };
   assert.deepEqual(Config.validate(input), Config(input));
 });
+
+/* ───────────────── 插件形状：cordis 会读的那四样 ───────────────── */
+
+test('插件形状：cordis 只读这四样，形状必须对', async () => {
+  // ⚠️ **这组测试是为了挡"装不上"那一类问题。**
+  //
+  // 起因：303 项单元测试全绿，插件装进真 profile 之后整个没激活 ——
+  // 因为我的兜底 Config 少了 .validate()，而 cordis 是调它、不是调函数本身。
+  //
+  // 教训：**接口的形状靠被调用方定，不靠读代码猜。**
+  // 这条测试只模拟 cordis 的那几个动作，不模拟 DSH 的别的东西。
+  const m = await import('../src/host/index.mjs');
+
+  assert.equal(typeof m.name, 'string', 'name 必须是字符串');
+  assert.ok(m.name.length > 0);
+  assert.ok(Array.isArray(m.inject), 'inject 必须是数组');
+  assert.equal(typeof m.apply, 'function', 'apply 必须是函数');
+});
+
+test('插件形状：Config 要满足 cordis 的用法（可调用 + validate + dict）', async () => {
+  const m = await import('../src/host/index.mjs');
+  const C = m.Config;
+
+  assert.notEqual(C, undefined, 'Config 不能是 undefined —— 是的话 DSH 传空模板');
+  assert.equal(typeof C, 'function', 'cordis 会把它当函数调');
+  assert.equal(typeof C.validate, 'function', '**cordis 调的是这个 —— 缺了插件不激活**');
+  assert.ok(C.dict !== undefined && typeof C.dict === 'object', '设置表单读 .dict');
+
+  // 真的按 cordis 的方式用一遍
+  const validated = C.validate({ dataDir: '/verify/me', debugLog: true });
+  assert.equal(validated.dataDir, '/verify/me');
+  assert.equal(validated.debugLog, true);
+});
