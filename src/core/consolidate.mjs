@@ -24,6 +24,31 @@ import { extractKeywords } from './keywords.mjs';
  *  - 允许并鼓励 `skip` —— 让模型有权利说"没什么值得记的"，这是稀疏性的来源
  *  - 强调第一人称与"像人回头想事情"，避免第三人称报告体
  */
+/**
+ * 两条文本有多像（字符二元组的 Jaccard）。
+ *
+ * 用来判断"模型这次写的是同一件事的新版本，还是另一件事"。
+ * 中文没有空格，所以按**字符二元组**切 —— 比按词切简单，也不需要分词器。
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {number} 0~1
+ */
+export function similarity(a, b) {
+  const grams = (t) => {
+    const s = String(t ?? '').replace(/\s/g, '');
+    const set = new Set();
+    for (let i = 0; i + 1 < s.length; i++) set.add(s.slice(i, i + 2));
+    return set;
+  };
+  const A = grams(a);
+  const B = grams(b);
+  if (A.size === 0 || B.size === 0) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter += 1;
+  return inter / (A.size + B.size - inter);
+}
+
 export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是把一段对话写成日记，外加一份"我对他 / 我自己的印象"。
 
 【怎么交差】
@@ -139,6 +164,15 @@ export const DEFAULT_CONSOLIDATION = Object.freeze({
    * 续写让"一件事 = 一条日记"；上限让它不会长成一篇。
    */
   appendMaxChars: 500,
+  /**
+   * 续写兜底：新旧两条的相似度到这个数，就当成"同一件事的加长版"，
+   * 用新的替换旧的（而不是新建一条）。
+   *
+   * 为什么需要它：prompt 里明说"只写 diary.append"，模型实测不照做 ——
+   * 它照旧每次写完整的 text，于是同一件事被写成两条一模一样的。
+   * 不靠它听话，自己判。
+   */
+  appendSimilarity: 0.5,
   /** 单个 trait 的 confidence 上限，避免某条偏好被无限强化 */
   maxTraitConfidence: 20,
   /** 每天衰减系数 */
@@ -342,6 +376,8 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
   const rawDiary = parsed?.diary;
   let accepted = false;
   let appended = false;
+  // "太像但不更长" —— 意图是丢弃，得让它真的别走到新建那条路
+  let skipNew = false;
 
   // —— 续写：把补充内容拼到已有那条后面，不新建条目 ——
   //
@@ -376,7 +412,38 @@ export function applyConsolidation(archive, parsed, context = {}, options = {}) 
     }
   }
 
-  if (!accepted && rawDiary && typeof rawDiary.text === 'string' && rawDiary.text.trim() !== '') {
+  // ── 兜底：模型没按"只写 append"来，而是又给了完整的新版本 ──
+  //
+  // 这是实测出来的：prompt 里说得很清楚"不要重写全文、只写 diary.append"，
+  // 模型照旧每次都写完整的 text。于是同一件事被写成两条几乎一样的条目。
+  //
+  // 所以不靠它听话：自己判断"这是不是同一件事的加长版"。
+  // 判据用 char-bigram 的 Jaccard —— 同一件事换个说法会很高，"换了一件事"会很低。
+  if (!accepted && typeof extendId === 'string' && typeof rawDiary?.text === 'string') {
+    const i = next.diary.findIndex((e) => e.id === extendId);
+    const fresh = rawDiary.text.trim();
+    if (i >= 0 && fresh !== '') {
+      const sim = similarity(next.diary[i].text, fresh);
+      if (sim >= opts.appendSimilarity && fresh.length > next.diary[i].text.length) {
+        const sal = clamp(rawDiary.salience, 0, 1, 0.5);
+        next.diary[i] = {
+          ...next.diary[i],
+          text: fresh.slice(0, appendMax),
+          salience: Math.max(next.diary[i].salience ?? 0, sal),
+          updated_at: now,
+          keywords: extractKeywords(fresh.slice(0, appendMax), { max: 12 }),
+        };
+        notes.push(`模型写了完整版（相似度 ${sim.toFixed(2)}），按续写处理，替换原条目`);
+        accepted = true;
+        appended = true;
+      } else if (sim >= opts.appendSimilarity) {
+        notes.push(`和上一条太像（相似度 ${sim.toFixed(2)}）但不更长，丢弃`);
+        skipNew = true;
+      }
+    }
+  }
+
+  if (!accepted && !skipNew && rawDiary && typeof rawDiary.text === 'string' && rawDiary.text.trim() !== '') {
     const salience = clamp(rawDiary.salience, 0, 1, 0.5);
     const tags = Array.isArray(rawDiary.tags)
       ? rawDiary.tags.filter((t) => typeof t === 'string' && t.trim() !== '').slice(0, 8)

@@ -1,4 +1,4 @@
-# 肥鱼日记 · feiyu-memory
+﻿# 肥鱼日记 · feiyu-memory
 
 > 让新开一个对话，用户依然感觉是**同一条鱼**。
 >
@@ -434,7 +434,7 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 ## 开发
 
 ```bash
-node --test            # 241 项测试，零依赖
+node --test            # 245 项测试，零依赖
 npm run check          # 校验 cordis.patch.yml 结构
 npm run doctor         # 发版前体检
 npm run preview        # 把此刻注入给模型的内容打出来

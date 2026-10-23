@@ -994,7 +994,12 @@ export function apply(ctx, rawConfig) {
       lastEvent.text.length < appendMax
         ? lastEvent
         : null;
-    if (extendTarget) log(`续写上一条 ${extendTarget.id}（轮数差 ${s.turn - extendTarget.turn}）`);
+    // 两种都打 —— 下次一眼看出是"没找到可续的"还是"找到了但模型不听话"
+    log(
+      extendTarget
+        ? `续写判断：接上一条 ${extendTarget.id}（轮数差 ${s.turn - extendTarget.turn}，${extendTarget.text.length} 字）`
+        : `续写判断：没有可续的（最后一条事件 turn=${lastEvent?.turn ?? "—"}，本轮 turn=${s.turn}）`,
+    );
 
     const built = buildConsolidationInput({
       transcript: scrubbed.text,

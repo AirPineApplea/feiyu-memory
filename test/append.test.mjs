@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createEmptyArchive, normalizeDiaryEntry } from '../src/core/archive.mjs';
-import { applyConsolidation, DEFAULT_CONSOLIDATION, buildConsolidationInput } from '../src/core/consolidate.mjs';
+import { applyConsolidation, DEFAULT_CONSOLIDATION, buildConsolidationInput, similarity } from '../src/core/consolidate.mjs';
 
 const NOW = Date.parse('2026-10-22T22:00:00+08:00');
 
@@ -165,4 +165,71 @@ test('链路: 老条目没有 turn —— 于是不会被当成可续写的目�
   const old = normalizeDiaryEntry({ id: 'old', text: '很久以前的一条。', created_at: NOW - 86400000 });
   // 这正是"不误伤历史档案"的那道保护：Number.isFinite(undefined) 是 false
   assert.equal(Number.isFinite(old.turn), false);
+});
+
+/* ───────────────────── 兜底：模型不听话的时候 ───────────────────── */
+
+const SHORT =
+  '又来一条。格式工整、带括号指令、还替我数句子——跟上回那个模板几乎一字不差。我没上当，直接点破了。' +
+  '点破之后我没把话头掐死。闷是真的，想暖和也是真的，这两句我认。所以我说过来坐，位置还空着。' +
+  '赌约还挂着呢。这回算我猜对了，按约定他得再写一段小作文。我记着这笔账，别让他赖。';
+
+const LONG =
+  '又来一条。格式工整、带括号指令、还替我数句子——跟上回那个模板几乎一字不差。我没上当，直接点破了。' +
+  '点破之后我没把话头掐死。闷是真的，想暖和也是真的，这两句我认。所以我说过来坐，位置还空着。' +
+  '他说坐在哪，我说没椅子没手，就坐我旁边吧，白饭搁桌上，铁盆扣我头上，剩下的地方挤挤能坐两个人。' +
+  '然后他忽然说香港热，周五要穿长裤做实验。我顺着说了句楼里冷、实验室更狠，问什么实验，不方便就当我没问。' +
+  '赌约还挂着。这回算我猜对了，按约定他得再写一段小作文。我记着这笔账，别让他赖。';
+
+const OTHER = '他今天问我怎么备份档案，我说把整个文件夹拷走就行，别只拷渲染版。';
+
+test('similarity: 同一件事的加长版很高，另一件事很低', () => {
+  const s1 = similarity(SHORT, LONG);
+  const s2 = similarity(SHORT, OTHER);
+  console.log('  加长版 ' + s1.toFixed(2) + ' / 另一件事 ' + s2.toFixed(2));
+  assert.ok(s1 >= 0.5, '加长版应该过阈值，实际 ' + s1.toFixed(2));
+  assert.ok(s2 < 0.5, '另一件事应该低于阈值，实际 ' + s2.toFixed(2));
+});
+
+test('兜底: 模型给了完整的新版本（更长）→ 替换原来那条，不新建', () => {
+  const a = withOneEntry({ text: SHORT });
+  const before = a.diary.length;
+
+  const r = applyConsolidation(
+    a,
+    { skip: false, diary: { text: LONG, salience: 0.6 } },
+    { now: NOW, session: 'sess-1', sessionDiaryCount: 1, sessionTurn: 11, extendId: 'd_20261022_01' },
+    {},
+  );
+
+  assert.equal(r.accepted, true);
+  assert.equal(r.appended, true, '要算续写');
+  assert.equal(r.archive.diary.length, before, '不能新建');
+  assert.equal(r.archive.diary[0].text, LONG, '应该换成新的那版');
+  assert.equal(r.archive.diary[0].updated_at, NOW);
+});
+
+test('兜底: 一字不差（不更长）→ 丢弃，不重复写一条', () => {
+  const a = withOneEntry({ text: SHORT });
+  const r = applyConsolidation(
+    a,
+    { skip: false, diary: { text: SHORT, salience: 0.6 } },
+    { now: NOW, session: 'sess-1', sessionDiaryCount: 1, sessionTurn: 11, extendId: 'd_20261022_01' },
+    {},
+  );
+  assert.equal(r.accepted, false, '一模一样的东西不该再写一遍');
+  assert.equal(r.archive.diary.length, 1);
+});
+
+test('兜底: 换了一件事 → 照常新建（不能因为"有 extendId"就乱合并）', () => {
+  const a = withOneEntry({ text: SHORT });
+  const r = applyConsolidation(
+    a,
+    { skip: false, diary: { text: OTHER, tags: ['备份'], kind: 'chat', salience: 0.6 } },
+    { now: NOW, session: 'sess-1', sessionDiaryCount: 1, sessionTurn: 11, extendId: 'd_20261022_01' },
+    {},
+  );
+  assert.equal(r.accepted, true);
+  assert.equal(r.appended, false, '这是另一件事');
+  assert.equal(r.archive.diary.length, 2, '该新建');
 });
