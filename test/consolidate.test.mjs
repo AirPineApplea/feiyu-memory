@@ -59,7 +59,11 @@ test('config: 越界与错误类型都退回安全值，且不抛错', () => {
   assert.equal(c.maxShowPerTurn, 0);
   assert.equal(c.minSalience, CONFIG_DEFAULTS.minSalience);
   assert.equal(c.enabled, false);
-  assert.equal(c.model, '123');
+  // ⚠️ 这条断言改过。以前 string 字段对非字符串做 String(value)，所以 model: 123
+  // 会变成 '123'。现在**非字符串直接回默认值** —— 因为 String(value) 正是把
+  // cosmokit 的 volatile 引用变成 [object Object] 的那一步。
+  // 与其让它变成一串垃圾再传给 path.resolve / 当模型名，不如回默认，好排查得多。
+  assert.equal(c.model, '');
 });
 
 test('config: 规格表里每个字段都有默认值', () => {

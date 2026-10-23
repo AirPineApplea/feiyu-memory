@@ -159,7 +159,53 @@ export const CONFIG_DEFAULTS = Object.freeze(
   Object.fromEntries(CONFIG_SPEC.map((f) => [f.key, f.default])),
 );
 
+/**
+ * DSH 0.2.0-rc.2 起，loader 会把 `config:` 里的每个值包成 cosmokit 的
+ * **volatile 引用**（为了 `patchReload: live` 热重载）：
+ *
+ *   { get: () => current, [Symbol.for("cosmokit.volatile.write")]: (v) => {...} }
+ *
+ * 它是 Object.freeze 过的普通对象，get 是函数值 —— 于是：
+ *   JSON.stringify(ref) → "{}"
+ *   Object.keys(ref)    → ["get"]
+ *   String(ref)         → **"[object Object]"**
+ *
+ * 我们原来把它当值用，后果比"路径难看"严重得多：
+ *
+ *   · **所有 string 字段**变成 "[object Object]"：
+ *       dataDir       → 变成相对路径，跟着进程 cwd 跑。换个目录启动就"搬家"，
+ *                       表现像失忆，而且全程无报错。
+ *       model         → 不存在的模型名，**固化那次调用根本发不出去**，
+ *                       只剩 feiyu_note 能写进去。
+ *       reasoningEffort / offPeakHours → 同样失效。
+ *   · **number / boolean** 静默回落默认值（Number(ref) 是 NaN、布尔比不上），
+ *     用户改不动 budgetTokens / minSalience，也没有任何提示。
+ *
+ * 正确读法是 `.get()`（DSH 自家插件都这么写，比如 dsh-bash-local 的 workdir）。
+ *
+ * 用 Symbol.for 探测、不 import cosmokit —— 保住「零运行时依赖」。
+ *
+ * 报这个 bug 的朋友把机制定位到了 cosmokit 的那一行，还贴了只读探针的输出。
+ * 我原来那个"只认绝对路径"的补丁只是治标：它拦住了 [object Object] 当路径，
+ * 但 model / offPeakHours 照样坏，数字布尔照样静默回落。
+ */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
+
+function unref(value) {
+  if (typeof value !== 'object' || value === null) return value;
+  // volatile 的判据：写着 write symbol，而且 get 是函数
+  if (VOLATILE_WRITE in value && typeof value.get === 'function') {
+    try {
+      return value.get();
+    } catch {
+      return undefined;
+    }
+  }
+  return value;
+}
+
 function coerce(field, value) {
+  value = unref(value);
   if (value === undefined || value === null) return field.default;
 
   if (field.type === 'boolean') {
@@ -178,7 +224,9 @@ function coerce(field, value) {
     return out;
   }
 
-  return typeof value === 'string' ? value : String(value);
+  // ⚠️ 别对非字符串做 String(value) —— 那正是把对象变成 "[object Object]" 的那一步。
+  // 配置项不是字符串，说明上层给错了；回默认比"变成一串垃圾"好排查得多。
+  return typeof value === 'string' ? value : field.default;
 }
 
 /**

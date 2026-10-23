@@ -1,5 +1,38 @@
 # 更新日志
 
+## v0.3.1 — 2026-10-23
+
+### 修 — 配置值全是 `[object Object]`（这个问题比上一个深一层）
+
+> 报告来源：一次 GitHub issue，附了 cosmokit 的源码位置和只读探针的输出。**这份报告直接给了根因。**
+
+**DSH 0.2.0-rc.2 起，loader 会把 `config:` 里的每个值包成 cosmokit 的 volatile 引用**（为了 `patchReload: live` 热重载）：
+
+```js
+{ get: () => current, [Symbol.for('cosmokit.volatile.write')]: (v) => { current = v } }
+```
+
+它是 `Object.freeze` 过的普通对象：`String(ref)` 是字面量 **`"[object Object]"`**，`JSON.stringify(ref)` 是 `{}`，`Object.keys` 只有 `["get"]`。
+
+我们把它当普通值用，于是：
+
+- **所有 string 字段变成 `"[object Object]"`**
+  - `dataDir` → 成了相对路径，跟着进程 cwd 跑。**换个目录启动就"搬家"，表现像失忆，全程无报错**
+  - `model` / `reasoningEffort` → 不存在的模型名，**固化那次调用根本发不出去**，只剩 `feiyu_note` 能写进去
+  - `offPeakHours` → 解析不出来
+- **number / boolean 静默回落默认值** —— 用户改不动 `budgetTokens` / `minSalience`，也没有任何提示
+
+**这也解释了上一个 `dataDir` 的 `[object Object]` 报告** —— 那个是现象，这个是根因。v0.3.0 里加的"只认绝对路径"只是拦住了它当路径用，**`model` 那几处还是坏的，数字布尔还在静默回落**。
+
+**修法**（采纳报告建议）：
+
+1. `coerce()` 第一行先 `unref()` —— 用 `Symbol.for('cosmokit.volatile.write')` 探测、不 import cosmokit，**保住零运行时依赖**
+2. string 字段对非字符串**回默认值**，不再 `String(value)` —— 那一步正是把对象变成 `"[object Object]"` 的地方
+3. `get()` 抛错时安全降级，不把插件带崩
+
+**加防**：`test/volatile.test.mjs` 10 项，逐字照抄 cosmokit 的 `createVolatile` 当 fixture —— string / number / boolean 三类都验，纯值配置的回归也验，坏值仍然安全降级。
+
+---
 ## v0.3.0 — 2026-10-23
 
 ### 修 — 档案写进 `[object Object]` 目录（社区报的）
