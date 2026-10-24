@@ -730,17 +730,6 @@ export function apply(ctx, rawConfig) {
       // 否则刚补完的那条会按原始时间沉下去。
       .sort((a, b) => (a.updated_at ?? a.created_at) - (b.updated_at ?? b.created_at));
       const shownNotes = allNotes.slice(-MAX_NOTES);
-      const olderNotes = allNotes.slice(0, -MAX_NOTES);
-
-      const { chosen } = selectMemories([...events, ...olderNotes], index, query, s, s.turn, {
-        highSim: config.highSim,
-        maxShow: config.maxShowPerTurn,
-        wanderChance: config.wanderChance,
-        // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
-        // 门槛降到 0.15 却在这里卡 0.25，等于白降。
-        minSalience: Math.max(0.15, config.minSalience),
-        now: Date.now(),
-      });
 
       // 「最近的事」—— 按时间取最近的几条，不走相似度。
       // 这是让注入区读起来像日记而不是像检索结果的关键：
@@ -749,6 +738,36 @@ export function apply(ctx, rawConfig) {
       // 取的是 **events**，不是整个日记 —— 判断归「我自己想的」管。
       const recentCount = Number.isFinite(config.recentEntries) ? config.recentEntries : 8;
       const recent = recentCount > 0 ? events.slice(-recentCount) : [];
+      const recentIds = new Set(recent.map((e) => e.id));
+
+      // ⚠️ **召回池里不能有「最近的事」那几条。**
+      //
+      // 实测抓到的坑：它们已经常驻了，却又混进召回池一起竞争 ——
+      // 而"最近"天然含着你刚说过的话，字面命中率最高，于是**永远赢**。
+      //
+      // 具体表现：他问「赛博朋克让你想到什么」，召回选中了
+      // 「他连着测了三句：赛博朋克、随心所欲、手机号……」—— 那是我自己写的
+      // 测试记录，含所有测试词所以分最高；真正的赛博朋克日记永远出不来。
+      // 而且那条已经在「最近的事」里，渲染时会被去重跳过，
+      // 连「突然想起来」都不显示 —— 召回了，等于没召回。
+      //
+      // 排除之后：同一句话会去挑真正的旧事（实测赛博朋克那条命中了
+      // 「边缘行者2 上线，总导演从今石之洋换成五十岚海」）。
+      const olderNotes = allNotes.slice(0, -MAX_NOTES);
+      const recallPool = [
+        ...events.filter((e) => !recentIds.has(e.id)),
+        ...olderNotes,
+      ];
+
+      const { chosen } = selectMemories(recallPool, index, query, s, s.turn, {
+        highSim: config.highSim,
+        maxShow: config.maxShowPerTurn,
+        wanderChance: config.wanderChance,
+        // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
+        // 门槛降到 0.15 却在这里卡 0.25，等于白降。
+        minSalience: Math.max(0.15, config.minSalience),
+        now: Date.now(),
+      });
 
       // 手记是**只读**的，所以每轮都重新读一遍 —— 别的肥鱼或用户刚写进去的
       // 那行，下一轮就在注入里，不用重启。文件很小，而且整块渲染按轮缓存。

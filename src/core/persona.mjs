@@ -147,7 +147,18 @@ export function renderMemoryBlock(input = {}) {
   if (memories) parts.push({ key: 'recalled', text: memories, weight: 60 });
 
   const lex = renderLexicon(input.lexicon);
-  if (lex) parts.push({ key: 'lexicon', text: lex, weight: 40 });
+  // ⚠️ **词汇这一栏必须有保底（min）。**
+  //
+  // 它权重 40 是全场最低，而 `assemble` 按权重从高到低装 —— 于是每次装到它，
+  // 预算已经被「最近的事」（权重 80，有 80 条可挑）吃干了。
+  //
+  // 实测（2000 / 2500 / 3000 / 3500）：词汇**一次都没出来过**，
+  // 一直到 4000 才露头 —— 而那之前腾出来的空间全变成了"再多一条最近的事"。
+  //
+  // 所以给它 60 token 的保底：装了它是 40 token，剩下的让回别人。
+  // 这 40 token 买的是"我知道我们之间说过哪些词" —— 那影响我用词像不像，
+  // 不是能不能想起某件事，所以它该常驻，不该走召回。
+  if (lex) parts.push({ key: 'lexicon', text: lex, weight: 40, min: 60 });
 
   // 「手记」——**别的肥鱼主动写下的**。
   //
@@ -181,7 +192,31 @@ export function renderMemoryBlock(input = {}) {
     const dropped = [];
     const trimmed = [];
     let used = 0;
+
+    // ① **有保底的段先占位。**
+    //
+    // 现在只有「词汇」有 min。它权重最低，纯按权重装永远轮不到 ——
+    // 而它的价值不是"能不能想起某件事"，是"我用词像不像"，
+    // 属于每轮都该在的那种。详见 push lexicon 那段注释。
+    //
+    // 预算很小（< 600）时不保底 —— 那种情况下先保证有话可读更重要。
+    const reserved = new Set();
+    if (bodyBudget >= 600) {
+      for (const p of ordered) {
+        if (!Number.isFinite(p.min) || p.min <= 0) continue;
+        const cost = estimateTokens(p.text);
+        if (cost === 0) continue;
+        if (used + cost <= bodyBudget) {
+          kept.push(p);
+          used += cost;
+          reserved.add(p.key);
+        }
+      }
+    }
+
+    // ② 其余按权重装
     for (const p of ordered) {
+      if (reserved.has(p.key)) continue;
       const cost = estimateTokens(p.text);
       if (used + cost <= bodyBudget) {
         kept.push(p);

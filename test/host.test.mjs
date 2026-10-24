@@ -533,6 +533,10 @@ test('host: 同一轮内多次 assemble 拿到完全相同的文本（不换着�
     {
       seed: (() => {
         const s = createEmptyArchive(NOW, ensurePersonaStructure('# 我是谁\n我是蓝色大肥鱼。'));
+        // d1 是最旧的那条 —— 该被"想起来"的就是它。
+        // 为什么后面还要塞 9 条：`recentEntries` 默认 8，而召回池现在
+        // **排除了「最近的事」那几条**（它们已经常驻，不该再被想起来一遍）。
+        // 只塞一两条的话，它们全落在最近窗口里，召回池是空的。
         s.diary.push(
           normalizeDiaryEntry({
             id: 'd1',
@@ -541,9 +545,21 @@ test('host: 同一轮内多次 assemble 拿到完全相同的文本（不换着�
             kind: 'failure',
             salience: 0.8,
             resolved: false,
-            created_at: NOW,
+            created_at: NOW - 30 * 86400000,
           }),
         );
+        for (let k = 2; k <= 10; k++) {
+          s.diary.push(
+            normalizeDiaryEntry({
+              id: 'd' + k,
+              text: '第 ' + k + ' 条闲聊，没什么值得记的。',
+              tags: ['闲聊'],
+              kind: 'chat',
+              salience: 0.6,
+              created_at: NOW - (11 - k) * 86400000,
+            }),
+          );
+        }
         return s;
       })(),
     },
@@ -569,6 +585,10 @@ test('host: 强相关时真的会"突然想起来"', async () => {
     {
       seed: (() => {
         const s = createEmptyArchive(NOW, ensurePersonaStructure('# 我是谁\n我是蓝色大肥鱼。'));
+        // d1 是最旧的那条 —— 该被"想起来"的就是它。
+        // 为什么后面还要塞 9 条：`recentEntries` 默认 8，而召回池现在
+        // **排除了「最近的事」那几条**（它们已经常驻，不该再被想起来一遍）。
+        // 只塞一两条的话，它们全落在最近窗口里，召回池是空的。
         s.diary.push(
           normalizeDiaryEntry({
             id: 'd1',
@@ -577,9 +597,21 @@ test('host: 强相关时真的会"突然想起来"', async () => {
             kind: 'failure',
             salience: 0.8,
             resolved: false,
-            created_at: NOW,
+            created_at: NOW - 30 * 86400000,
           }),
         );
+        for (let k = 2; k <= 10; k++) {
+          s.diary.push(
+            normalizeDiaryEntry({
+              id: 'd' + k,
+              text: '第 ' + k + ' 条闲聊，没什么值得记的。',
+              tags: ['闲聊'],
+              kind: 'chat',
+              salience: 0.6,
+              created_at: NOW - (11 - k) * 86400000,
+            }),
+          );
+        }
         return s;
       })(),
     },
