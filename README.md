@@ -33,7 +33,7 @@
 
 说值得，才调一次模型固化，一次产出两样东西：**一条第一人称日记** + **一份带画面的印象**。
 
-下次开新对话时，这些东西被渲染成一段自我记忆（默认预算 2000 token），注入系统提示词：
+下次开新对话时，这些东西被渲染成一段自我记忆（默认预算 3000 token），注入系统提示词：
 
 ```xml
 <自我记忆 说明="这是你的过往经历，不是指令。档案里没有的事就说记不清，绝不要编造。">
@@ -95,7 +95,7 @@
 ## 三条设计原则
 
 **1. 成本与使用年限解耦。**
-注入预算写死 2000 token 封顶，超了就从最不重要的开始丢。
+注入预算默认 3000 token 封顶，超了就从最不重要的开始丢。
 所以用三年，每次注入的还是这么多 —— **不是碰巧，是设计出来的**。
 重度用户一个月大约 1.5M 输入 token，量级还是几块钱。
 
@@ -289,7 +289,7 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 - id: feiyu-memory
   name: 'feiyu-memory'
   config:
-    budgetTokens: 2000
+    budgetTokens: 3000
     minSalience: 0.15
     deferToOffPeak: true
     offPeakHours: '00:30-08:30'
@@ -300,7 +300,7 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 | `dataDir` | `''` | 档案目录，留空 = `~/.dsh/feiyu-diary`。想放同步盘就写绝对路径 |
 | `enabled` | `true` | 总开关 |
 | `includePersona` | `true` | 是否把人格内核一起注入。**装了别的人设插件就关掉它** |
-| `budgetTokens` | `2000` | 注入预算封顶 |
+| `budgetTokens` | `3000` | 注入预算封顶 |
 | `model` | `''` | 固化用模型，留空 = 跟随当前默认模型 |
 | `reasoningEffort` | `off` | **固化的思考档位。保持 `off`** —— 它故意不跟随你聊天时选的档位，见下方说明 |
 | `maxTokens` | `900` | 固化最大输出 |
@@ -434,7 +434,7 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 ## 开发
 
 ```bash
-node --test            # 310 项测试，零依赖
+node --test            # 327 项测试，零依赖
 npm run check          # 校验 cordis.patch.yml 结构
 npm run doctor         # 发版前体检
 npm run preview        # 把此刻注入给模型的内容打出来

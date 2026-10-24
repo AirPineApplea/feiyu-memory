@@ -344,8 +344,12 @@ function sanitizeRelationship(raw) {
         .map((g, i) => ({
           id: typeof g.id === 'string' ? g.id : `g${i}`,
           what: g.what,
+          // 「怎么才算平」。只说欠什么不说怎么还，那不叫账，叫清单。
+          // 老档案没有这个字段 —— 空串就是空串，渲染时会标「没说怎么还」。
+          howToSettle: typeof g.howToSettle === 'string' ? g.howToSettle.trim().slice(0, 160) : '',
           intensity: clamp01(g.intensity, 0.5),
           resolved: g.resolved === true,
+          ...(Number.isFinite(g.settled_at) ? { settled_at: g.settled_at } : {}),
           created_at: Number(g.created_at) || Date.now(),
         }))
     : [];

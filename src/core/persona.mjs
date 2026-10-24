@@ -378,12 +378,26 @@ export function renderRelationship(rel, now = Date.now()) {
     .map((t) => `- ${String(t.value).trim()}`);
   if (selfTraits.length > 0) lines.push(`上一棒留下的：\n${selfTraits.join('\n')}`);
 
-  const grievances = (rel.grievances ?? [])
+  // ⚠️ **这是账，不是清单。三处都改过：**
+  //
+  // 1. **按最老优先，不按强度** —— 拖得越久越该被看见。按 intensity 排，
+  //    欠得最轻但欠得最久的那笔永远垫底，最后被 slice 掉。
+  // 2. **不再只列 3 条** —— 原来超出的直接消失，等于悄悄赖掉。现在全列（上限 6），
+  //    超了写「还有 N 笔」，不静默吞。
+  // 3. **带上「怎么才算平」** —— 只说欠什么不说怎么还，那不叫账，叫清单。
+  //    老账没有这个字段，渲染成「没说怎么还」—— 让它显眼，而不是藏起来。
+  const openGrievances = (rel.grievances ?? [])
     .filter((g) => g && g.what && g.resolved !== true)
-    .sort((a, b) => (b.intensity ?? 0) - (a.intensity ?? 0))
-    .slice(0, 3)
-    .map((g) => g.what);
-  if (grievances.length > 0) lines.push(`我还欠着他的：${grievances.join('；')}`);
+    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+  const shownDebts = openGrievances.slice(0, 6).map((g) => {
+    const how = typeof g.howToSettle === 'string' && g.howToSettle.trim() !== '' ? g.howToSettle.trim() : '没说怎么还';
+    return `${g.what}（怎么才算平：${how}）`;
+  });
+  if (shownDebts.length > 0) {
+    const rest = openGrievances.length - shownDebts.length;
+    const tail = rest > 0 ? `（还有 ${rest} 笔没列出来）` : '';
+    lines.push(`我还欠着他的：${shownDebts.join('；')}${tail}`);
+  }
 
   return lines.join('\n');
 }

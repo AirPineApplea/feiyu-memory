@@ -54,7 +54,7 @@ test('config: 越界与错误类型都退回安全值，且不抛错', () => {
     enabled: 'false',
     model: 123,
   });
-  // 上限现在是 4000（预算从 700 提到 2000 之后跟着抬的）
+  // 上限现在是 8000（默认 3000，抬过一次上限）
   assert.equal(c.budgetTokens, CONFIG_SPEC.find((f) => f.key === 'budgetTokens').max);
   assert.equal(c.maxShowPerTurn, 0);
   assert.equal(c.minSalience, CONFIG_DEFAULTS.minSalience);
@@ -945,19 +945,17 @@ test('decay: 隔天按系数衰减，但条目还在（遗忘是降级不是删�
   assert.ok(Math.abs(r.archive.diary[0].salience - 0.8 * 0.9 ** 3) < 1e-9);
 });
 
-test('decay: 旧账随时间消解，强度够低就自动翻篇', () => {
-  const a = createEmptyArchive(NOW, 'x');
+test('decay: 旧账不会随时间自己消解 —— 那是赖账', () => {
+  // 这条原来是反的：断言「60 天后 intensity 掉到 0.2 以下就 resolved = true」。
+  // **那个行为是错的，已删。** 账只有两个来源能平：我做到、或他明说算了。
+  const a = createEmptyArchive(NOW, "# x");
   a.relationship.grievances.push({
-    id: 'g1',
-    what: '上次没问清语言',
-    intensity: 0.5,
-    resolved: false,
-    created_at: NOW,
+    what: '没问清语言就动手', howToSettle: '下次先问', intensity: 0.6, resolved: false, created_at: NOW,
   });
-  a.manifest.last_decay_at = NOW;
-
-  const r = decayArchive(a, { now: NOW + 60 * 86400000, grievanceDecay: 0.97, grievanceForgiveBelow: 0.2 });
-  assert.equal(r.archive.relationship.grievances[0].resolved, true, '不能记仇记到有害');
+  const r = decayArchive(a, { now: NOW + 60 * 86400000 });
+  const g = r.archive.relationship.grievances[0];
+  assert.equal(g.resolved, false, '六十天后也不许自动平');
+  assert.equal(g.intensity, 0.6, '强度不衰减');
 });
 
 test('decay: 偏好比事件衰减得慢', () => {

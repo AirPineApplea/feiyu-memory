@@ -48,9 +48,12 @@ export const CONFIG_SPEC = [
   {
     key: 'budgetTokens',
     type: 'number',
-    default: 2000,
+    // 2000 → 3000。量过的：常驻段本身要 2680 token（「最近的事」八条占 1422），
+    // 2000 根本装不下，每次都裁 —— 「最近的事」只剩 2 条。3000 能给到 6 条。
+    // 代价约每轮 +1000 token ≈ 每句话多 0.06 分。
+    default: 3000,
     min: 200,
-    max: 4000,
+    max: 8000,
     step: 1,
     label: '注入预算（token）',
   },

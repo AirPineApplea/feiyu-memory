@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveConfig } from '../src/core/config.mjs';
+import { resolveConfig, CONFIG_SPEC } from '../src/core/config.mjs'
+
+// 默认预算会变（2000 → 3000），别在测试里死写数字 ——
+// 那会让「改默认值」变成「改测试」。
+const BUDGET_DEFAULT = CONFIG_SPEC.find((f) => f.key === 'budgetTokens').default;
 
 /**
  * cosmokit 的 createVolatile —— **逐字照抄**（社区报告里贴的那段）。
@@ -48,7 +52,7 @@ test('volatile: number / boolean 也要解开（否则静默回落）', () => {
     recentEntries: createVolatile(5),
     maxShowPerTurn: createVolatile(2),
   });
-  assert.equal(c.budgetTokens, 3000, '不能静默回落 2000');
+  assert.equal(c.budgetTokens, 3000, '不能静默回落默认值');
   assert.equal(c.enabled, false, '不能静默回落 true');
   assert.equal(c.recentEntries, 5);
   assert.equal(c.maxShowPerTurn, 2);
@@ -61,7 +65,7 @@ test('volatile: get() 抛错时安全降级，不能把插件带崩', () => {
   });
   const c = resolveConfig({ dataDir: broken, budgetTokens: broken });
   assert.equal(c.dataDir, '');
-  assert.equal(c.budgetTokens, 2000);
+  assert.equal(c.budgetTokens, BUDGET_DEFAULT);
 });
 
 /* ───────────────── 回归：纯值配置照旧 ───────────────── */
@@ -77,7 +81,7 @@ test('回归: 老宿主给的是纯值，行为一点不能变', () => {
 test('回归: 什么都没配 → 全走默认', () => {
   const c = resolveConfig(undefined);
   assert.equal(c.dataDir, '');
-  assert.equal(c.budgetTokens, 2000);
+  assert.equal(c.budgetTokens, BUDGET_DEFAULT);
   assert.equal(c.enabled, true);
 });
 
@@ -95,7 +99,7 @@ test('硬化: string 字段拿到非字符串 → 回默认，而不是 String(x
 test('硬化: 坏值本来就是安全降级，这条别破', () => {
   const c = resolveConfig({ enabled: 'nope', budgetTokens: 'x', minSalience: 'oops' });
   assert.equal(c.enabled, true);
-  assert.equal(c.budgetTokens, 2000);
+  assert.equal(c.budgetTokens, BUDGET_DEFAULT);
   assert.equal(c.minSalience, 0.15);
 });
 

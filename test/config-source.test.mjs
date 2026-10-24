@@ -20,7 +20,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveConfig } from '../src/core/config.mjs';
+import { resolveConfig, CONFIG_SPEC } from '../src/core/config.mjs';
 import { Config } from '../src/host/index.mjs';
 
 /** 报告里那份"每个字段都是空对象"的模板 */
@@ -48,7 +48,7 @@ test('空模板：string 字段全部回默认（于是档案不会再跑去 [ob
 test('空模板：number / boolean 也回默认（debugLog 尤其重要 —— 不然开日志也看不到）', () => {
   const c = resolveConfig(EMPTY_TEMPLATE);
   assert.equal(c.debugLog, false);
-  assert.equal(c.budgetTokens, 2000);
+  assert.equal(c.budgetTokens, CONFIG_SPEC.find((f) => f.key === 'budgetTokens').default);
   assert.equal(c.enabled, true);
   assert.equal(c.minSalience, 0.15);
 });
