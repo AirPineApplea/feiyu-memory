@@ -45,7 +45,7 @@
 ---
 ### 修 — 配置根本传不进插件（`Config` 是 `undefined`）
 
-> 报告来源：GitHub issue。**这份比前一份深一层 —— 前一份是现象，这是根因。**
+> 报告来源：[@7881632](https://github.com/7881632) 的 [#7](https://github.com/AirPineApplea/feiyu-memory/issues/7)。**这份比前一份深一层 —— 前一份是现象，这是根因。**
 
 **现象**：装完 `~/.dsh/feiyu-diary/` 一直是空目录，插件看起来一切正常 ——
 注入区在、`/feiyu-diary/state` 返回 `ok:true`、`feiyu_note` 每次都回「记住了」。
@@ -103,7 +103,7 @@ resolveArchiveDir() 当路径用  path.resolve 按进程 cwd 解析
 
 ### 修 — 安全审计的四条（两条 P1 直接推翻 README 的隐私承诺）
 
-> 报告来源：review.lingshulab.com 的独立审计。**这份验的是承诺，不是功能。**
+> 报告来源：[@LarryE135](https://github.com/LarryE135) 的独立审计 —— [#3](https://github.com/AirPineApplea/feiyu-memory/issues/3) [#4](https://github.com/AirPineApplea/feiyu-memory/issues/4) [#5](https://github.com/AirPineApplea/feiyu-memory/issues/5) [#6](https://github.com/AirPineApplea/feiyu-memory/issues/6)。**这份验的是承诺，不是功能。**
 
 README 把隐私叫「这个插件的信任地基」，承诺三件事：密钥硬拦绝不入档 /
 第三方隐私落盘前替换 / 一键焚毁不可恢复。**四条发现里两条打穿了它。**
@@ -188,7 +188,7 @@ same-origin`）；`/export` 也校验。GET 不设这条 —— 它只读。
 
 ### 修 — 配置值全是 `[object Object]`（这个问题比上一个深一层）
 
-> 报告来源：一次 GitHub issue，附了 cosmokit 的源码位置和只读探针的输出。**这份报告直接给了根因。**
+> 报告来源：[@whitesunsongepic](https://github.com/whitesunsongepic) 的 [#1](https://github.com/AirPineApplea/feiyu-memory/issues/1)，附了 cosmokit 的源码位置和只读探针的输出。**这份报告直接给了根因。**
 
 **DSH 0.2.0-rc.2 起，loader 会把 `config:` 里的每个值包成 cosmokit 的 volatile 引用**（为了 `patchReload: live` 热重载）：
 
@@ -221,7 +221,7 @@ same-origin`）；`/export` 也校验。GET 不设这条 —— 它只读。
 
 ### 修 — 档案写进 `[object Object]` 目录（社区报的）
 
-> 报告来源：B 站一位朋友，附了完整的环境、定位、复现和建议。**报告质量很高。**
+> 报告来源：B 站一位朋友（没有 GitHub 账号，就不圈了），附了完整的环境、定位、复现和建议。**报告质量很高。**
 
 **现象**：`~/.dsh/feiyu-diary/` 一直不产生档案，但插件一切正常 —— 人格注入在跑、`feiyu_note` 能用、日志里没有任何报错。
 

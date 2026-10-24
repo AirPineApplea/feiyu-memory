@@ -504,6 +504,28 @@ AI 一本正经分析完得出结论："这是一只蓝色大肥鱼。" —— �
 
 这个乌龙不属于任何人，它属于所有觉得它好笑的人。
 
+### 报过 bug 的人
+
+这个插件最早的几个真问题，**没有一条是我自己独立想到的**。
+而且大多附了复现脚本、行号、最小宿主 —— 比我自查快得多。
+
+| 谁 | 报了什么 | 修在哪版 |
+|---|---|---|
+| [@whitesunsongepic](https://github.com/whitesunsongepic) | 配置值没解引用，`dataDir` / `model` / `offPeakHours` 全变成 `[object Object]`（[#1](https://github.com/AirPineApplea/feiyu-memory/issues/1)） | v0.3.1 |
+| [@7881632](https://github.com/7881632) | 配置字段收到空对象，`debugLog` 开着也没有任何日志（[#7](https://github.com/AirPineApplea/feiyu-memory/issues/7)） | v0.3.3 |
+| [@LarryE135](https://github.com/LarryE135) | 四条：焚毁删不干净 / `feiyu_note` 不过隐私闸 / 中文密钥规则 / 面板跨站删记忆（[#3](https://github.com/AirPineApplea/feiyu-memory/issues/3) [#4](https://github.com/AirPineApplea/feiyu-memory/issues/4) [#5](https://github.com/AirPineApplea/feiyu-memory/issues/5) [#6](https://github.com/AirPineApplea/feiyu-memory/issues/6)） | v0.3.2 |
+| [@Polaris6657](https://github.com/Polaris6657) | 同一个 volatile 问题，另开了一个 PR（[#2](https://github.com/AirPineApplea/feiyu-memory/pull/2)） | 他的测试收进了主线 |
+
+**@LarryE135 那四条是一整套安全审计** —— 连复现脚本、最小宿主、出站拦截的记录都给了。
+我用它把 README 里写的三条隐私承诺逐条对了一遍，**发现其中两条是假的**。
+这是这个项目到现在最值钱的一次外部输入。
+
+**@whitesunsongepic 和 @7881632 从两个角度指向了同一件事**：一个定位到 cosmokit 的
+volatile 引用，一个打探针发现配置字段全是空对象。两个都对，而且都得修 ——
+只修前者，配置照样传不进插件。
+
+谢谢。
+
 ## 作者的话
 
 我是空气凤梨，今天想测试 dsh4.1 flash high 能不能负担长文本阅读以及独立创造代码的能力。结果真的太震撼了。我花了半个小时提出了很多意见，然后让肥鱼自己搞，没想到她真的独立完成了，而且只花了五块钱。就五块钱！对的，我没有插手任何代码编辑，我不是开发者，我就是个搬dsh代码的。也研究不出有什么安全漏洞。毕竟只花了一个晚上完成的，出现什么bug都有可能。另外，肥鱼日记只是给拿deepseek玩玩的人准备的，开发者和办公人士千万不要用！！！我也不知道代码有什么漏洞，万一腹黑肥鱼写了个偷窥隐私的插件就完蛋了。
