@@ -205,7 +205,6 @@ test('F5: 固化输出也要洗 —— 模型会照抄输入', () => {
     diary: { text: '他拿 123456789012 当网友号码发过来。', tags: ['试探'], kind: 'chat', salience: 0.6 },
     relationship: {
       traits: [{ key: '试探方式', value: '用梗试判断力', evidence: '他拿 123456789012 当网友号码发过来', about: 'user', delta: 1 }],
-      grievances: [{ what: '拿 123456789012 试探我', intensity: 0.5, resolved: false }],
     },
     lexicon: [],
     forget: [],
@@ -216,7 +215,6 @@ test('F5: 固化输出也要洗 —— 模型会照抄输入', () => {
   assert.equal(dump.includes('123456789012'), false, '整份档案里都不能有');
   assert.equal(r.archive.diary[0].text.includes('123456789012'), false, 'diary 正文不能有');
   assert.equal(r.archive.relationship.traits[0].evidence.includes('123456789012'), false, 'evidence 不能有');
-  assert.equal(r.archive.relationship.grievances[0].what.includes('123456789012'), false, 'grievances 不能有');
 });
 
 test('F5: 洗输出不会弄坏其他字段', () => {
@@ -228,7 +226,6 @@ test('F5: 洗输出不会弄坏其他字段', () => {
       nickname: null,
       familiarityDelta: 0.01,
       traits: [{ key: '近况', value: '在考虑换城市', evidence: '他说还没告诉任何人', about: 'user', delta: 1 }],
-      grievances: [],
     },
     lexicon: ['白饭'],
     forget: [],

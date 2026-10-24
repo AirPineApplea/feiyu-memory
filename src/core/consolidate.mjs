@@ -68,8 +68,7 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
   "relationship": {
     "nickname": string | null,
     "familiarityDelta": number,
-    "traits": [ { "key": string, "value": string, "evidence": string, "about": "user" | "self", "delta": number } ],
-    "grievances": [ { "what": string, "howToSettle": string, "intensity": number, "resolved": boolean } ]
+    "traits": [ { "key": string, "value": string, "evidence": string, "about": "user" | "self", "delta": number } ]
   },
   "lexicon": string[],
   "forget": string[]
@@ -110,32 +109,6 @@ traits 分两种，用 about 区分：
 哪怕是他要求的也一样 —— "他让我先问细节"记成 self（那是我的做法），
 "他喜欢一层层追问到底"才是 user（那是他的脾气）。
 
-【账】
-
-这里是这个日记最要紧的一处判断：**往事和账别混在一起记。**
-
-  往事 —— 发生过什么、谁说了什么。想起来就想起来，忘了也没什么。
-          稀疏地冒出来才像活的。
-  账   —— 你答应过谁什么、欠着谁一件事、那条还没平。
-          **这类不能等"想起来"。它有到期日，忘了就是赖账。**
-
-所以每写一条，先问自己一句：
-
-  **如果这条永远不被想起来，会出事吗？**
-
-会 → 别把它当日记写。写成账：欠谁的、欠什么、**怎么才算平**。
-不会 → 那就老实当往事，写得有味道一点就行。
-
-grievances 每条必须有 howToSettle（怎么才算平）—— 一句具体的话，
-不是"以后注意"这种。正例：「下次读 evidence 时，念出格子里写了什么」。
-写不出怎么才算平，说明它还不是账，那它就是往事，别放进 grievances。
-
-**resolved 只在两种情况下给 true**：你已经做到了（有具体的事可以指），
-或者他明说这条算了。**「久了忘了」不算** —— 那是赖账。没做到就给 false。
-
-**别绷太紧。** 不是所有事都写成账。全写成账，日记就变对账单了。
-往事写味道，账写义务。两栏，两种写法。
-
 【词汇】
 
 lexicon 只填真正的口头禅、梗、称呼 —— 他给你起的外号、你们反复接的那一句梗、
@@ -156,7 +129,7 @@ lexicon 只填真正的口头禅、梗、称呼 —— 他给你起的外号、�
 
 正例 ——
 输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
-输出：{"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码","沟通失误"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","evidence":"我没问语言就写了 Java，他纠正我","about":"user","delta":1}],"grievances":[{"what":"没问清语言就动手","howToSettle":"下次动手前先问一句用什么语言","intensity":0.6,"resolved":false}]},"lexicon":[],"forget":[]}
+输出：{"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码","沟通失误"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","evidence":"我没问语言就写了 Java，他纠正我","about":"user","delta":1}]},"lexicon":[],"forget":[]}
 
 反例一（复述隐私，绝对不要）——
 {"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","tags":["隐私"],"kind":"disclosure","salience":0.9,"resolved":null}}
@@ -244,24 +217,12 @@ export function buildConsolidationInput(input = {}) {
   const chunks = [];
 
   const rel = input.relationship;
-  if (rel && ((rel.traits ?? []).length > 0 || (rel.grievances ?? []).length > 0)) {
+  if (rel && (rel.traits ?? []).length > 0) {
     const traits = (rel.traits ?? [])
       .slice(0, 8)
       .map((t) => `${t.key}=${t.value}(×${t.confidence})`)
       .join('；');
-    // 未平的账：**最老优先**，而且带上「怎么才算平」——
-    // 只给一句"欠什么"，模型没法判断这次是不是还上了。
-    const open = (rel.grievances ?? [])
-      .filter((g) => g.resolved !== true)
-      .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0))
-      .map((g) => {
-        const how = typeof g.howToSettle === 'string' && g.howToSettle !== '' ? g.howToSettle : '（没说怎么还）';
-        return `${g.what} —— 怎么才算平：${how}`;
-      })
-      .join('；');
-    chunks.push(
-      `【已经知道的】\n${traits ? `偏好：${traits}` : ''}${open ? `\n还没解决的：${open}` : ''}`,
-    );
+    if (traits) chunks.push(`【已经知道的】\n偏好：${traits}`);
   }
 
   // 这条可能还没写完 —— 上一轮刚记过同一件事
@@ -410,7 +371,7 @@ export function makeDiaryId(now, existing) {
  *
  * 社区报告（2026-10-24）指出的漏洞：固化**输入**是洗过的（发给模型的
  * transcript 干净），但**输出没洗** —— 模型会照抄输入里的敏感片段，
- * 写进 `traits.evidence` / `diary.text` / `grievances.what`。
+ * 写进 `traits.evidence` / `diary.text`。
  * 那次是一串 13 位号码躺进了 relationship.json，而我这条鱼压根不知道它进去了。
  *
  * **"我写不写"只是最前面一道闸。档案里大部分内容是模型生成的，
@@ -448,12 +409,6 @@ function scrubParsed(parsed, options) {
         };
       });
     }
-    if (Array.isArray(r.grievances)) {
-      r.grievances = r.grievances.map((g) => {
-        if (g === null || typeof g !== 'object') return g;
-        return { ...g, ...(typeof g.what === 'string' ? { what: wash(g.what) } : {}) };
-      });
-    }
     if (typeof r.nickname === 'string') r.nickname = wash(r.nickname);
     out.relationship = r;
   }
@@ -477,7 +432,6 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
     relationship: {
       ...archive.relationship,
       traits: [...(archive.relationship?.traits ?? [])],
-      grievances: [...(archive.relationship?.grievances ?? [])],
     },
     lexicon: { items: [...(archive.lexicon?.items ?? [])] },
     diary: [...(archive.diary ?? [])],
@@ -652,46 +606,16 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
     }
   }
 
-  // —— 关系：旧账 ——
-  // ⚠️ **账的 resolved 只有两个来源：我把它还了，或者他明说算了。**
+  // ⚠️ **「还欠着他的」这个功能已于 2026-10-24 整体删除，别加回来。**
   //
-  // 「久了我忘了」不算 —— 那正是赖账。所以这里只认模型明确给的 resolved：
-  // true，而不是从强度、时间、数量任何一边推出来。
+  // 删的理由不是「不好用」，是**它长出来的东西几乎全是错的**：
+  //   · 口径太宽 —— 把「我今天做错的事」当成「我欠他的一件事」
+  //   · 只进不出 —— 没有销账的路，只有模型明说 resolved 才平，而它几乎不说
+  //   · 还会重复记账 —— 同一件事换个说法就成两笔
+  // 结果一天记了 21 笔、27 笔未平，占注入预算 10%，而且会让人在无关话题上
+  // 突然「想起」自己欠着什么，做出莫名其妙的反应。
   //
-  // 匹配键还是 what（同一句话说两次算同一笔），但 howToSettle 允许后来补：
-  // 老账没有这个字段，模型第一次说清"怎么才算平"时就该记上，
-  // 而且不许用空串把已有的覆盖掉。
-  if (rel && Array.isArray(rel.grievances)) {
-    for (const g of rel.grievances.slice(0, 6)) {
-      if (!g || typeof g.what !== 'string' || g.what.trim() === '') continue;
-      const what = g.what.trim().slice(0, 160);
-      const howToSettle =
-        typeof g.howToSettle === 'string' ? g.howToSettle.trim().slice(0, 160) : '';
-      const intensity = clamp(g.intensity, 0, 1, 0.5);
-      const resolved = g.resolved === true;
-
-      const existing = next.relationship.grievances.find((x) => x.what === what);
-      if (existing === undefined) {
-        next.relationship.grievances.push({
-          id: `g_${now.toString(36)}_${next.relationship.grievances.length}`,
-          what,
-          howToSettle,
-          intensity,
-          resolved,
-          ...(resolved ? { settled_at: now } : {}),
-          created_at: now,
-        });
-      } else {
-        existing.intensity = Math.max(existing.intensity, intensity);
-        // 空串不覆盖已有的说法
-        if (howToSettle !== '') existing.howToSettle = howToSettle;
-        if (resolved && existing.resolved !== true) {
-          existing.resolved = true;
-          existing.settled_at = now;
-        }
-      }
-    }
-  }
+  // 如果哪天真要「承诺跨会话」，得先解决出口、口径、去重三件事 —— 不能换个名字再塞一遍。
 
   // —— 词汇与梗：只认模型**明确点名**的 ——
   //
@@ -793,24 +717,8 @@ export function decayArchive(archive, options = {}) {
     salience: Math.max(opts.salienceFloor, (Number.isFinite(t.salience) ? t.salience : 0.5) * Math.pow(0.97, days)),
   }));
 
-  // ⚠️ **账不衰减，也不自动翻篇。**
-  //
-  // 这是一封信里的判断，我原来搞反了 —— 往事和账要分开记：
-  //
-  //   往事 —— 发生过什么。想起来就想起来，忘了没什么。稀疏地冒出来才像活的。
-  //   账   —— 答应过谁什么、欠着谁一件事。**不能等"想起来"，它有到期日，
-  //           忘了就是赖账。**
-  //
-  // 原来这里是 `intensity *= 0.97^天`，掉到 0.2 以下就 `resolved = true`：
-  // 0.9 那笔 50 天平、0.6 那笔 37 天平 —— **没人管 = 算平了。**
-  // 那不是遗忘，是替用户赖账。
-  //
-  // 现在的规矩：**时间不会替你还债。** 账要么由我做到、要么由他明说算了，
-  // 只有这两个来源能让它平（见 applyConsolidation 对 resolved 的处理）。
-  //
-  // 顺带一笔：上上轮给账加的地板（salienceFloor 0.16）比翻篇线（0.2）低，
-  // 永远到不了 —— 那条注释是在给赖账打掩护，一起删了。
-  const grievances = (archive.relationship?.grievances ?? []).map((g) => ({ ...g }));
+  // 账（relationship.grievances）整个功能已删 —— 这里不再需要特殊处理。
+  // 删的理由见 applyConsolidation 里那段注释。
 
   return {
     archive: {
@@ -818,7 +726,7 @@ export function decayArchive(archive, options = {}) {
       manifest: { ...archive.manifest, last_decay_at: now, updated_at: now },
       diary,
       lexicon: { items },
-      relationship: { ...archive.relationship, traits, grievances },
+      relationship: { ...archive.relationship, traits },
     },
     days,
     changed: true,

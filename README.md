@@ -54,7 +54,6 @@
 - 讨厌铺垫，要结论先行 —— 我铺垫了三段，他直接说"说重点"
 上一棒留下的：
 - 没落盘之前，不假装记得他说过什么
-我还欠着他的：上次没问清语言就动手了
 
 最近的事：
 - 今天：他让我写个排序，我没问清语言就动手了。
@@ -434,7 +433,7 @@ cat ~/.dsh/profiles/desktop/package.json     # dependencies 有它，dsh.profile
 ## 开发
 
 ```bash
-node --test            # 327 项测试，零依赖
+node --test            # 307 项测试，零依赖
 npm run check          # 校验 cordis.patch.yml 结构
 npm run doctor         # 发版前体检
 npm run preview        # 把此刻注入给模型的内容打出来

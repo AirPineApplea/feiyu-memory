@@ -945,19 +945,6 @@ test('decay: 隔天按系数衰减，但条目还在（遗忘是降级不是删�
   assert.ok(Math.abs(r.archive.diary[0].salience - 0.8 * 0.9 ** 3) < 1e-9);
 });
 
-test('decay: 旧账不会随时间自己消解 —— 那是赖账', () => {
-  // 这条原来是反的：断言「60 天后 intensity 掉到 0.2 以下就 resolved = true」。
-  // **那个行为是错的，已删。** 账只有两个来源能平：我做到、或他明说算了。
-  const a = createEmptyArchive(NOW, "# x");
-  a.relationship.grievances.push({
-    what: '没问清语言就动手', howToSettle: '下次先问', intensity: 0.6, resolved: false, created_at: NOW,
-  });
-  const r = decayArchive(a, { now: NOW + 60 * 86400000 });
-  const g = r.archive.relationship.grievances[0];
-  assert.equal(g.resolved, false, '六十天后也不许自动平');
-  assert.equal(g.intensity, 0.6, '强度不衰减');
-});
-
 test('decay: 偏好比事件衰减得慢', () => {
   const a = createEmptyArchive(NOW, 'x');
   a.diary.push(normalizeDiaryEntry({ id: 'd1', text: '事', salience: 1, created_at: NOW }));

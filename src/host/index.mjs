@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 肥鱼日记 · Host 半边
  *
  * 让新开一个对话，用户依然感觉是同一条鱼。
@@ -1576,9 +1576,7 @@ export function apply(ctx, rawConfig) {
           evidence: typeof t.evidence === 'string' ? t.evidence : '',
           about: t.about === 'self' ? 'self' : 'user',
         })),
-      grievances: (rel.grievances ?? [])
-        .filter((g) => g && g.resolved !== true)
-        .map((g) => g.what),
+      // grievances 随「我还欠着他的」功能一起删了（2026-10-24）。
       facts: {
         // 跟注入层用同一把尺子（timeline.mjs）—— 面板说"认识 1 天"、
         // 注入里说"2 天前"，是同一类 bug 换了个出口

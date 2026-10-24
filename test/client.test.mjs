@@ -248,7 +248,6 @@ test('client: 拿到数据后把日记、印象、规矩都渲染出来', async 
       { value: '讨厌铺垫', evidence: '他直接说"说重点"', about: 'user' },
       { value: '不假装记得', evidence: '', about: 'self' },
     ],
-    grievances: ['没问清语言就动手'],
     facts: { days: 3, nickname: '肥鱼', lexicon: ['白饭', '摸鱼'] },
   };
   const react = makeStubReact();
@@ -273,7 +272,8 @@ test('client: 拿到数据后把日记、印象、规矩都渲染出来', async 
   assert.match(out, /他直接说/, '印象必须带画面');
   assert.match(out, /上一棒留下的/, '规矩单独一栏，且措辞跟注入层一致');
   assert.match(out, /不假装记得/, '规矩内容');
-  assert.match(out, /还欠着他的/, '未消解的旧账');
+  // 「我还欠着他的」那一栏随功能删除（2026-10-24）。
+  assert.doesNotMatch(out, /还欠着他的/, '这一栏已经删了');
   assert.match(out, /他翻出一篇小说给我看/, '日记正文');
   assert.match(out, /白饭/, '口头禅');
   assert.match(out, /导出档案/, '带走');
@@ -293,7 +293,6 @@ test('client: 空档案说人话，不是一片空白', async () => {
             count: 0,
             diary: [],
             traits: [],
-            grievances: [],
             facts: { days: 0, nickname: '', lexicon: [] },
           }),
       }),

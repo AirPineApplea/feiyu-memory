@@ -19,7 +19,6 @@ function archiveWith(salience, daysAgo = 30) {
       created_at: NOW - daysAgo * DAY,
     }),
   );
-  a.relationship.grievances.push({ what: '欠着一笔', intensity: 0.9, resolved: false });
   a.relationship.traits.push({ key: 'k', value: 'v', evidence: 'e', about: 'self', confidence: 3, salience: 0.8 });
   return a;
 }
@@ -43,32 +42,6 @@ test('地板高于召回门槛 —— 老条目还能被"偶然想起"', () => {
     DEFAULT_CONSOLIDATION.salienceFloor > runtimeMin,
     `floor ${DEFAULT_CONSOLIDATION.salienceFloor} 必须高于运行时门槛 ${runtimeMin}，否则老条目连随机池都进不去`,
   );
-});
-
-test('账不衰减：时间磨不掉强度，也平不了账', () => {
-  // ⚠️ 这条原来断言「floor 必须低于翻篇线，否则旧账平不掉」——
-  // **那个设计是错的**：账不该自动平。现在账根本不参与衰减，
-  // floor 跟账没关系。这条改为钉住「时间动不了账」。
-  const a = createEmptyArchive(NOW, "# x");
-  a.relationship.grievances.push({
-    what: '欠着一笔', howToSettle: '还上', intensity: 0.9, resolved: false, created_at: NOW,
-  });
-  const r = decayArchive(a, { now: NOW + 400 * 86400000 });
-  const g = r.archive.relationship.grievances[0];
-  assert.equal(g.intensity, 0.9, '账的强度不许被时间磨掉');
-  assert.equal(g.resolved, false, '更不许自动平');
-});
-
-test('衰减一百天后，账还在那儿 —— 时间不会替你还债', () => {
-  const a = createEmptyArchive(NOW, "# x");
-  a.relationship.grievances.push({
-    what: '答应了没做', howToSettle: '把它做掉', intensity: 0.5, resolved: false, created_at: NOW,
-  });
-  const r = decayArchive(a, { now: NOW + 100 * 86400000 });
-  const g = r.archive.relationship.grievances[0];
-  assert.equal(g.resolved, false, '一百天后也不许自动平');
-  assert.equal(g.intensity, 0.5, '强度不动');
-  assert.equal(g.howToSettle, '把它做掉', '怎么才算平还在');
 });
 
 test('词汇、偏好也都有底', () => {

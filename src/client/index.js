@@ -384,10 +384,7 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-          // ── 还欠着的 ──
-          (d.grievances || []).length > 0
-            ? h(Section, { title: '我还欠着他的' }, h(Empty, { text: d.grievances.join('；') }))
-            : null,
+          // 「我还欠着他的」那一栏随功能一起删了（2026-10-24）。
 
           // ── 日记 ──
           h(

@@ -91,14 +91,7 @@ export function renderDiaryMarkdown(archive, options = {}) {
   if (traits.length > 0) {
     relLines.push(`- 他：${traits.map((t) => t.value).join('；')}`);
   }
-  const openGrievances = (rel.grievances ?? []).filter((g) => g && g.what && g.resolved !== true);
-  if (openGrievances.length > 0) {
-    relLines.push(`- 我还欠着他的：${openGrievances.map((g) => g.what).join('；')}`);
-  }
-  const settled = (rel.grievances ?? []).filter((g) => g && g.what && g.resolved === true);
-  if (settled.length > 0) {
-    relLines.push(`- 已经翻篇的：${settled.map((g) => g.what).join('；')}`);
-  }
+  // 「我还欠着他的」/「已经翻篇的」两行随功能一起删了（2026-10-24）。
 
   if (relLines.length > 0) {
     out.push('## 我们');

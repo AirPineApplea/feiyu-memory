@@ -54,20 +54,16 @@ test('render: 刚建档案时说"今天刚认识"', () => {
   assert.ok(md.includes('## 还没有日记'));
 });
 
-test('render: 关系摘要包含昵称、偏好、未解决的旧账、已翻篇的', () => {
+test('render: 关系摘要包含昵称、偏好（账那一栏已删）', () => {
   const a = archiveWith([entry()], (x) => {
     x.relationship.nickname = '蓝色大肥鱼';
     x.relationship.traits.push({ key: 'k1', value: '讨厌铺垫', confidence: 3, salience: 0.9, last_reinforced: NOW });
-    x.relationship.grievances.push(
-      { id: 'g1', what: '没问清语言就动手', intensity: 0.7, resolved: false, created_at: NOW },
-      { id: 'g2', what: '上次答太长', intensity: 0.3, resolved: true, created_at: NOW },
-    );
   });
   const md = renderDiaryMarkdown(a, { now: NOW });
   assert.ok(md.includes('他管我叫「蓝色大肥鱼」'));
   assert.ok(md.includes('讨厌铺垫'));
-  assert.ok(md.includes('我还欠着他的：没问清语言就动手'));
-  assert.ok(md.includes('已经翻篇的：上次答太长'));
+  // 「我还欠着他的」/「已经翻篇的」两行随功能删除（2026-10-24）。
+  assert.ok(!md.includes('我还欠着他的'), '这一栏已经删了，不该再出现');
 });
 
 test('render: 低活跃的词不进人读版', () => {

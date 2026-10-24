@@ -47,14 +47,6 @@ export const LEARNED_HEADING = '## 我后来想明白的';
  * @property {number} last_reinforced
  */
 
-/**
- * @typedef {object} Grievance
- * @property {string} id
- * @property {string} what
- * @property {number} intensity
- * @property {boolean} resolved
- * @property {number} created_at
- */
 
 /**
  * @typedef {object} Archive
@@ -99,7 +91,6 @@ export function createEmptyArchive(now = Date.now(), persona = '') {
       familiarity: 0,
       nickname: '',
       traits: /** @type {Trait[]} */ ([]),
-      grievances: /** @type {Grievance[]} */ ([]),
     },
     lexicon: { items: /** @type {Array<object>} */ ([]) },
     diary: /** @type {DiaryEntry[]} */ ([]),
@@ -223,7 +214,6 @@ export function archiveFromFiles(entries, options = {}) {
     familiarity: 0,
     nickname: '',
     traits: [],
-    grievances: [],
   });
   const lexicon = readJson(byName, LEXICON_FILE, warnings, { items: [] });
 
@@ -338,26 +328,12 @@ function sanitizeRelationship(raw) {
           last_reinforced: Number(t.last_reinforced) || Date.now(),
         }))
     : [];
-  const grievances = Array.isArray(raw?.grievances)
-    ? raw.grievances
-        .filter((g) => g && typeof g.what === 'string')
-        .map((g, i) => ({
-          id: typeof g.id === 'string' ? g.id : `g${i}`,
-          what: g.what,
-          // 「怎么才算平」。只说欠什么不说怎么还，那不叫账，叫清单。
-          // 老档案没有这个字段 —— 空串就是空串，渲染时会标「没说怎么还」。
-          howToSettle: typeof g.howToSettle === 'string' ? g.howToSettle.trim().slice(0, 160) : '',
-          intensity: clamp01(g.intensity, 0.5),
-          resolved: g.resolved === true,
-          ...(Number.isFinite(g.settled_at) ? { settled_at: g.settled_at } : {}),
-          created_at: Number(g.created_at) || Date.now(),
-        }))
-    : [];
+  // ⚠️ **这里不再解析 grievances。** 那个字段整个功能已经删除（2026-10-24）。
+  // 老档案里如果有这个字段，读盘时直接被忽略 —— 下一次写盘就没了。
   return {
     familiarity: clamp01(raw?.familiarity, 0),
     nickname: typeof raw?.nickname === 'string' ? raw.nickname : '',
     traits,
-    grievances,
   };
 }
 
@@ -567,13 +543,6 @@ export function mergeArchives(base, incoming, options = {}) {
     else existing.confidence = Math.max(existing.confidence, t.confidence);
   }
 
-  const grievanceIds = new Set(base.relationship.grievances.map((g) => g.id));
-  const grievances = [...base.relationship.grievances];
-  for (const g of incoming.relationship.grievances) {
-    if (grievanceIds.has(g.id)) continue;
-    grievanceIds.add(g.id);
-    grievances.push(g);
-  }
 
   const termSet = new Set((base.lexicon.items ?? []).map((i) => i.term));
   const items = [...(base.lexicon.items ?? [])];
@@ -596,7 +565,6 @@ export function mergeArchives(base, incoming, options = {}) {
       familiarity: Math.max(base.relationship.familiarity, incoming.relationship.familiarity),
       nickname: base.relationship.nickname || incoming.relationship.nickname,
       traits: [...traitByKey.values()],
-      grievances,
     },
     lexicon: { items },
     diary: merged,
