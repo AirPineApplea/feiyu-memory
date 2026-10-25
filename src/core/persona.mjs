@@ -144,7 +144,19 @@ export function renderMemoryBlock(input = {}) {
   if (recent) parts.push({ key: 'recent', text: recent, weight: 80 });
 
   const memories = renderRecalled(input.recalled, now);
-  if (memories) parts.push({ key: 'recalled', text: memories, weight: 60 });
+  // ⚠️ **召回这一栏也必须有保底。**
+  //
+  // 加词汇保底之后，死的是它 —— 实测（真实档案、回归查询）：
+  //
+  //   预算 3000 / 3200 / 3500   突然想起来 ✗   被裁 ["recalled"]
+  //   预算 4000                 突然想起来 ✓
+  //
+  // 原因是同一个：「最近的事」权重 80、有九十多条可挑，总能吃满预算，
+  // 后面两栏（召回 60 / 词汇 40）就只能排队。**修一个死一个。**
+  //
+  // 而「突然想起来」是这个插件的招牌：**老事浮出水面**。它要是永远死着，
+  // 用户从装上到现在可能一次都没见过。
+  if (memories) parts.push({ key: 'recalled', text: memories, weight: 60, min: 320 });
 
   const lex = renderLexicon(input.lexicon);
   // ⚠️ **词汇这一栏必须有保底（min）。**
