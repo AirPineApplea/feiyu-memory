@@ -40,11 +40,11 @@ import {
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
 import { SUPPRESS_RE } from '../core/gate.mjs';
-import { buildIndex, selectMemories, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
+import { buildIndex, selectMemories, searchScores, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET, MAX_NOTES } from '../core/persona.mjs';
-import { calendarDaysBetween, stripTimeWords } from '../core/timeline.mjs';
+import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
 import { selectHandNotes, HANDNOTE_FILE, HANDNOTE_TEMPLATE } from '../core/handnote.mjs';
@@ -678,6 +678,23 @@ export function apply(ctx, rawConfig) {
   const NOTE_TOOL_NAME = 'feiyu_note';
 
   /**
+   * 「去档案里找一句」的工具名。
+   *
+   * 为什么要它：注入的召回是**系统替它猜**（拿你这一轮的字面去匹配），
+   * 而字面匹配有个结构性劣势 —— 元日记（"他问了什么、我答了什么"）
+   * 永远比那件事本身字面更全，所以真东西压不上去。
+   *
+   * 工具换了个方向：**它自己知道在找什么。** 换个说法也能撞上。
+   *
+   * 而"知道有这个工具"靠两件东西（缺一不可）：
+   *   1. 工具签名 —— 注册了，DSH 就会把 schema 发给模型
+   *   2. 注入里那句指针 —— 在 `renderFor` 的 handNoteHint 里，每轮都读到
+   *
+   * 只做 1 不做 2，模型会想不起来用（工具一多就被淹）。
+   */
+  const RECALL_TOOL_NAME = 'feiyu_recall';
+
+  /**
    * 为某个会话渲染注入文本。
    *
    * **按轮缓存**：`assemble` 每个 model step 都会调用一次，
@@ -791,7 +808,13 @@ export function apply(ctx, rawConfig) {
         handNotes,
         // 这句是**唯一**能让别的肥鱼知道"可以主动记"的渠道 ——
         // 它们每轮都会读到这块记忆，不会去翻文档。
-        handNoteHint: `想给后面的我留话，用 ${NOTE_TOOL_NAME} 工具说一声就行 —— 不用管格式，也别为了记事去动文件。`,
+        //
+        // 第二句同理：给检索工具留个指针。**只注册工具不够** ——
+        // 工具一多就被淹，模型急起来想不起去查。这句在「帧」里、不进预算池，
+        // 所以不会像栏目那样被裁掉。
+        handNoteHint:
+          `想给后面的我留话，用 ${NOTE_TOOL_NAME} 工具说一声就行 —— 不用管格式，也别为了记事去动文件。\n` +
+          `想不起来某件事时，用 ${RECALL_TOOL_NAME} 去档案里找一下 —— 用当时的词，越具体越准。`,
         includePersona: config.includePersona,
         budget: config.budgetTokens,
         now: Date.now(),
@@ -1851,6 +1874,136 @@ export function apply(ctx, rawConfig) {
       'feiyu: note tool',
     );
     log(`已注册工具 ${NOTE_TOOL_NAME}`);
+
+    // ── 检索工具 ──
+    //
+    // 跟 feiyu_note 不一样的地方：**这里只读，不碰档案。**
+    //
+    // 为什么不复用 selectMemories 那套"选秀"逻辑（权重、冷却、走神、maxShow）：
+    // 那是给**每轮自动注入**设计的，要在"没人问"的情况下替它挑。
+    // 而工具是**它自己发起**的查询 —— 它知道自己在找什么，
+    // 所以直接按相似度排、取前 N 条，不设 salience 门槛。
+    //
+    // 明确要找，就该找得到，不管那件旧事淡到什么程度。
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: RECALL_TOOL_NAME,
+          description:
+            '去档案里找一条旧事。**你自己不知道那天发生过什么时用它**：' +
+            '他提到一件早先的事、你觉得该有记录但想不起来、或者要确认某个细节。' +
+            '只在真的需要时调，不要每轮都查。' +
+            '找不到就老实说没找到，别编。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              query: {
+                type: 'string',
+                description:
+                  '要找什么。用**当时的具体词** —— 人名、地点、物件、他那句话里的词。越具体越准，别写一整句话。',
+              },
+              limit: {
+                type: 'integer',
+                description: '要几条。默认 5，最多 10。',
+              },
+            },
+            required: ['query'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ok: { type: 'boolean' },
+                found: { type: 'integer' },
+                text: { type: 'string' },
+              },
+            },
+            render: (_args, value) => [{ type: 'text', text: value?.text ?? '查不了。' }],
+          },
+
+          async execute(args) {
+            await loadPromise;
+            if (!ready) throw new Error('档案现在读不了（可能是坏的），查不了。');
+
+            const query = typeof args?.query === 'string' ? args.query.trim() : '';
+            if (query === '') throw new Error('要找什么？query 不能是空的。');
+
+            const limitRaw = Number(args?.limit);
+            const limit = Number.isFinite(limitRaw)
+              ? Math.max(1, Math.min(10, Math.floor(limitRaw)))
+              : 5;
+
+            const scores = searchScores(index, query, { limit: 200 });
+            const byId = new Map(archive.diary.map((e) => [e.id, e]));
+            let ranked = [...scores.entries()]
+              .map(([id, sim]) => ({ entry: byId.get(id), sim }))
+              .filter((x) => x.entry && typeof x.entry.text === 'string')
+              .sort((a, b) => b.sim - a.sim)
+              .slice(0, limit);
+
+            // ── 兜底：词检索查不到时，直接扫原文子串 ──
+            //
+            // 为什么需要：分词只出**双字** bigram（`tokenize('他让我')` 是
+            // `['他让','让我']`，不含单字）。所以「他」「园」这种单字查询
+            // 在倒排索引里永远为空 —— 但它明明是想找的东西。
+            //
+            // 181 条 × 两百字，扫一遍是毫秒级，而且**只在没结果时才走**，
+            // 有结果就不兜，排序不受影响。
+            if (ranked.length === 0 && query.length <= 4) {
+              const needle = query.toLowerCase();
+              ranked = archive.diary
+                .filter((e) => typeof e.text === 'string' && e.text.toLowerCase().includes(needle))
+                .slice(-limit)
+                .reverse()
+                .map((entry) => ({ entry, sim: 0 }));
+              if (ranked.length > 0) log(`检索「${query.slice(0, 20)}」：词索引空，子串兜底命中 ${ranked.length} 条`);
+            }
+
+            if (ranked.length === 0) {
+              log(`检索「${query.slice(0, 20)}」：没找到`);
+              return {
+                ok: true,
+                found: 0,
+                text: `没找到关于「${query}」的记录。可以换个说法再试，或者直接问他。`,
+              };
+            }
+
+            // 总字数封顶 —— 不按"次数"限流（那要跨轮状态，麻烦），
+            // 按"返回量"限：超了就是一次失败的成本，它自己会学会别乱查。
+            const MAX_CHARS = 2000;
+            const lines = [];
+            let used = 0;
+            const now = Date.now();
+            for (const { entry } of ranked) {
+              // 跟注入走同一个隐私闸 —— 历史条目里可能还有没洗过的东西
+              const body = stripTimeWords(scrub(entry.text, { thirdParty: false }).text);
+              const when = softWhen(entry.created_at, now);
+              const line = when === '' ? body : `${when}：${body}`;
+              if (used + line.length > MAX_CHARS && lines.length > 0) break;
+              lines.push(`- ${line}`);
+              used += line.length;
+            }
+
+            log(`检索「${query.slice(0, 20)}」：返回 ${lines.length} 条`);
+            return {
+              ok: true,
+              found: lines.length,
+              text: `找到 ${lines.length} 条：\n${lines.join('\n')}`,
+            };
+          },
+
+          presentCall: (args) => ({
+            card: 'generic',
+            title: '翻档案',
+            kind: 'other',
+            rawInput: args,
+          }),
+        }),
+      'feiyu: recall tool',
+    );
+    log(`已注册工具 ${RECALL_TOOL_NAME}`);
   });
 
   log(`已加载，档案目录：${archiveDirectory}`);

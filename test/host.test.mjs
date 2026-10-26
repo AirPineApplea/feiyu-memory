@@ -1273,3 +1273,152 @@ test('persona: 没人改的时候，落盘也不会把内存那份丢掉', async
     assert.ok((await svc.snapshot()).diaryCount === 0, '焚毁该清掉日记');
   });
 });
+
+/* ───────────────────────── 检索工具 ───────────────────────── */
+
+const callRecall = (h, args) => h.tools.get('feiyu_recall').execute(args, {
+  signal: new AbortController().signal,
+});
+
+test('recall: 工具注册上了，描述里说清了「什么时候用」', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    const tool = h.tools.get('feiyu_recall');
+    assert.ok(tool, 'feiyu_recall 必须注册');
+    assert.match(tool.description, /不知道那天发生过什么/, '要说清触发时机');
+    assert.match(tool.description, /不要每轮都查/, '要拦住滥用');
+    assert.match(tool.description, /别编/, '找不到不许编');
+  });
+});
+
+test('recall: 注入里给了指针 —— 不然模型想不起来用', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const agent = h.makeAgent('s1');
+    h.emit('agent/created', { agent });
+    h.emit('session/event', { id: 's1' }, userEvent('随便聊聊'));
+
+    const injected = agent.sections[0].text();
+    assert.match(injected, /feiyu_recall/, '注入里要告诉它有这个工具');
+  });
+});
+
+test('recall: 查得到 —— 命中那条原文', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const r = await callRecall(h, { query: '排序' });
+    assert.equal(r.ok, true);
+    assert.ok(r.found >= 1, '应该找得到');
+    assert.match(r.text, /排序/);
+  }, { seed: makeSeed() });
+});
+
+test('recall: 查不到就老实说，不许编', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const r = await callRecall(h, { query: '量子引力波干涉仪' });
+    assert.equal(r.ok, true);
+    assert.equal(r.found, 0);
+    assert.match(r.text, /没找到/);
+  }, { seed: makeSeed() });
+});
+
+test('recall: 不设 salience 门槛 —— 快淡没的旧事也要找得到', async () => {
+  // 这是它跟"自动召回"的关键区别：明确要找了，就不该被强度门槛挡住。
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const r = await callRecall(h, { query: '小说' });
+    assert.ok(r.found >= 1, 'salience 0.5 那条也该被找到');
+    assert.match(r.text, /小说/);
+  }, { seed: makeSeed() });
+});
+
+test('recall: 返回的正文过隐私闸（历史条目可能没洗过）', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const r = await callRecall(h, { query: '部署' });
+    assert.ok(r.found >= 1, '应该找得到那条');
+    assert.equal(r.text.includes('sk-abcdefghijklmnopqrstuvwxyz012345'), false, '密钥不能原样返回');
+  }, {
+    seed: (() => {
+      const s = makeSeed();
+      s.diary.push(
+        normalizeDiaryEntry({
+          id: 'd_leak_01',
+          text: '他说部署 key 是 sk-abcdefghijklmnopqrstuvwxyz012345，记一下。',
+          tags: ['部署'],
+          kind: 'chat',
+          salience: 0.6,
+          created_at: NOW - 3600000,
+          session: 's1',
+        }),
+      );
+      return s;
+    })(),
+  });
+});
+
+test('recall: limit 生效，且最多 10 条', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const one = await callRecall(h, { query: '他', limit: 1 });
+    assert.equal(one.found, 1, 'limit 1 就只给一条');
+
+    const big = await callRecall(h, { query: '他', limit: 999 });
+    assert.ok(big.found <= 10, '上限 10，实际 ' + big.found);
+  }, { seed: makeSeed() });
+});
+
+test('recall: 空 query 要报错，不是返回一堆东西', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    await assert.rejects(() => callRecall(h, { query: '   ' }), /不能是空的/);
+  }, { seed: makeSeed() });
+});
+
+test('recall: 单字查询也能查到（分词只出双字，得靠子串兜底）', async () => {
+  // 这条是回归：分词只产双字 bigram（tokenize('他让我') 是 ['他让','让我']），
+  // 所以「他」这种单字在倒排索引里永远为空 —— 但它明明是想找的东西。
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const r = await callRecall(h, { query: '排' });
+    assert.ok(r.found >= 1, '单字该走子串兜底找到，实际 found=' + r.found);
+    assert.match(r.text, /排序/);
+  }, { seed: makeSeed() });
+});
+
+test('recall: 返回里不带绝对时间（免得它说「根据 X 月 X 日的记录」）', async () => {
+  await withHome(async (home) => {
+    const h = makeHarness();
+    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
+    await h.provided.get('feiyuMemory').snapshot();
+
+    const r = await callRecall(h, { query: '小说' });
+    assert.equal(/\d{4}-\d{2}-\d{2}/.test(r.text), false, '不该出现 ISO 日期');
+  }, { seed: makeSeed() });
+});
