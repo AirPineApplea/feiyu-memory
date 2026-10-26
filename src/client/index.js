@@ -282,15 +282,30 @@ window.__ModuleLoader__.load({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id }),
         })
-          .then((r) => r.json())
+          // ⚠️ **必须检查 r.ok。**
+          //
+          // 这里原来是 `.then((r) => r.json())` —— 服务端回 400/403 时 JSON 照样
+          // 能解析，于是被当成成功，接着刷新一遍、什么都没变。表现就是
+          // **「忘掉按钮点不动」**：没有报错、没有删除、没有任何提示。
+          //
+          // 2026-10-26 社区报的那个 bug，一半就出在这里：把它变成静默。
+          .then((r) =>
+            r
+              .json()
+              .catch(() => ({}))
+              .then((body) => {
+                if (!r.ok) throw new Error(body?.error || `HTTP ${r.status}`);
+                return body;
+              }),
+          )
           .then(() => {
             setBusy('');
+            setError('');
             setTick((n) => n + 1);
           })
-          .catch(() => {
+          .catch((err) => {
             setBusy('');
-            setError('删不掉，档案可能是只读的');
-            setPhase('error');
+            setError(`删不掉：${String((err && err.message) || err)}`);
           });
       }
 
@@ -348,6 +363,29 @@ window.__ModuleLoader__.load({
             { style: { margin: '6px 0 0', fontSize: 12, color: C.text2 } },
             head.join(' · '),
           ),
+
+          // ── 出错横幅 ──
+          //
+          // 之前「忘掉」失败是**完全静默**的：服务端回 400/403，前端把 JSON
+          // 当成功、刷新一遍、什么都没变 —— 用户只看到「点不动」。
+          // 现在失败会出现在这里，而且带着服务端说的原因。
+          error !== ''
+            ? h(
+                'p',
+                {
+                  style: {
+                    margin: '10px 0 0',
+                    padding: '8px 10px',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    color: C.err,
+                    border: `1px solid ${C.err}`,
+                    borderRadius: 6,
+                  },
+                },
+                error,
+              )
+            : null,
 
           // ── 我对他的一些印象 ──
           mine.length > 0

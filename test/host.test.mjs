@@ -870,6 +870,62 @@ test('panel: 同源但 Origin 不对 → 也挡（双保险）', async () => {
   }, { seed: makeSeed() });
 });
 
+test('panel: 没有任何来源头（桌面端 renderer 的常态）→ 必须放行', async () => {
+  // ⚠️ 这条是回归：2026-10-26 社区报「忘掉按钮点不动」。
+  //
+  // 前端带了 Content-Type: application/json，所以不是那条闸；是来源判定 ——
+  // 桌面端（Electron）的同源 fetch 未必带 Origin / Sec-Fetch-Site，
+  // 两个都没有就被判成跨站、403，而前端又不检查 r.ok，于是「点了没反应」。
+  //
+  // 判定顺序现在是：有 Sec-Fetch-Site 看它 → 有 Origin 比对 host → 都没有就放行。
+  // 浏览器发起的跨站 POST 一定至少带一个，所以这条没有放松防护。
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const before = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    const target = before.diary[0];
+
+    const res = await h.callRoute('/feiyu-diary/forget', {
+      method: 'POST',
+      body: { id: target.id },
+      headers: {
+        'content-type': 'application/json',
+        origin: '',
+        host: '127.0.0.1:1234',
+        'sec-fetch-site': '',
+      },
+    });
+
+    assert.equal(res.statusCode, 200, '没有来源头不该被当成跨站');
+    assert.equal(JSON.parse(res.body).removed, true, '应该真删掉');
+    const after = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    assert.equal(after.count, before.count - 1);
+  }, { seed: makeSeed() });
+});
+
+test('panel: 只有 Sec-Fetch-Site 且是 cross-site → 仍然要挡', async () => {
+  // 反向回归：放宽"两个都没有"之后，有明确跨站信号的必须继续挡住。
+  await withHome(async (home) => {
+    const h = await seededHarness(home);
+    const before = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    const target = before.diary[0];
+
+    const res = await h.callRoute('/feiyu-diary/forget', {
+      method: 'POST',
+      body: { id: target.id },
+      headers: {
+        'content-type': 'application/json',
+        origin: '',
+        host: '127.0.0.1:1234',
+        'sec-fetch-site': 'cross-site',
+      },
+    });
+
+    assert.notEqual(res.statusCode, 200);
+    const after = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    assert.equal(after.count, before.count);
+  }, { seed: makeSeed() });
+});
+
 test('panel: 删掉的那条会从磁盘上一起消失（不是只从界面消失）', async () => {
   await withHome(async (home) => {
     const h = await seededHarness(home);

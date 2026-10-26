@@ -1510,26 +1510,51 @@ export function apply(ctx, rawConfig) {
   /**
    * 这个请求是不是同源来的。
    *
-   * 判据两条，任一成立就算同源：
-   *   · `Origin` 的 host:port 等于请求的 `Host`
-   *   · `Sec-Fetch-Site` 是 `same-origin`
+   * **判定顺序（从强到弱）：**
+   *   1. 有 `Sec-Fetch-Site` → 必须 `same-origin`
+   *   2. 有 `Origin` → 它的 host:port 必须等于 `Host`
+   *   3. **两个都没有 → 放行**
    *
-   * 两个都没有（比如 curl）→ **拒**。面板自己发请求一定带 Origin，
-   * 所以拒掉"没有来源"的不会影响正常使用，但能挡住脚本乱打。
+   * ── 第 3 条是 2026-10-26 改的，起因是一个真 bug ──
    *
-   * 注意：GET（看状态）不设这条 —— 它只读，而且原来靠"不给 CORS 头"
-   * 已经让跨站页面读不到响应体了。真正要守的是写接口。
+   * 社区报「忘掉按钮点不动」。前端带了 `Content-Type: application/json`，
+   * 所以不是那条闸；最可能是这里：**桌面端（Electron）的 renderer 发同源 fetch
+   * 时未必带 `Origin` / `Sec-Fetch-Site`** —— 两个都没有就被判成跨站、403，
+   * 而前端又不检查 `r.ok`，于是「点了没反应」。
+   *
+   * 为什么"两个都没有"可以放行：**浏览器发起的跨站 POST 一定至少带一个**
+   * （`Origin` 是 Fetch 规范要求，现代浏览器再加 `Sec-Fetch-Site`）。
+   * 两个都没有，说明不是页面发起的普通请求。
+   *
+   * 而真正的闸是 `Content-Type: application/json` —— 跨站带它会触发预检，
+   * 预检失败请求就到不了这里。这条对跨站照样生效，没有放松。
    */
   function isSameOrigin(req) {
     const site = String(req.headers?.['sec-fetch-site'] ?? '').toLowerCase();
-    if (site === 'same-origin') return true;
+    if (site !== '') return site === 'same-origin';
     const origin = String(req.headers?.origin ?? '');
     const host = String(req.headers?.host ?? '');
-    if (origin === '' || host === '') return false;
+    if (origin !== '') {
+      if (host === '') return false;
+      try {
+        return new URL(origin).host === host;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 面板请求被拒时把凭据打出来 —— 否则"点了没反应"永远查不出原因 */
+  function logPanelReject(what, req, reason) {
     try {
-      return new URL(origin).host === host;
+      const h = req?.headers ?? {};
+      warn(
+        `面板 ${what} 被拒（${reason}）· host=${h.host ?? '-'} · origin=${h.origin ?? '-'} · ` +
+          `sec-fetch-site=${h['sec-fetch-site'] ?? '-'} · content-type=${h['content-type'] ?? '-'}`,
+      );
     } catch {
-      return false;
+      // 日志本身绝不能再抛
     }
   }
 
@@ -1551,8 +1576,14 @@ export function apply(ctx, rawConfig) {
    */
   async function readPanelBody(req) {
     const ct = String(req.headers?.['content-type'] ?? '').toLowerCase();
-    if (!ct.startsWith('application/json')) throw new Error('只接受 application/json');
-    if (!isSameOrigin(req)) throw new Error('跨站请求不予处理');
+    if (!ct.startsWith('application/json')) {
+      logPanelReject('写请求', req, 'content-type 不是 json');
+      throw new Error('只接受 application/json');
+    }
+    if (!isSameOrigin(req)) {
+      logPanelReject('写请求', req, '来源判定为跨站');
+      throw new Error('跨站请求不予处理');
+    }
     const chunks = [];
     let size = 0;
     for await (const chunk of req) {
