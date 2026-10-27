@@ -339,8 +339,9 @@ window.__ModuleLoader__.load({
       const d = state || {};
       const facts = d.facts || {};
       const traits = d.traits || [];
+      // 只显示「他是什么样的人」。`about === 'self'`（"我该怎么做"）那一类
+      // 2026-10-27 整类下线 —— 面板不显示，固化也不再产出。
       const mine = traits.filter((t) => t.about !== 'self');
-      const self = traits.filter((t) => t.about === 'self');
       const diary = d.diary || [];
 
       const head = [];
@@ -405,22 +406,10 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-          // ── 上一棒留下的 ──
-          // 措辞必须跟注入层（persona.mjs）一致 —— 同一个东西两个说法，
-          // 就是我们刚修过的那类毛病换了个出口。
-          self.length > 0
-            ? h(
-                Section,
-                { title: '上一棒留下的' },
-                self.map((t, i) =>
-                  h(
-                    'div',
-                    { key: `s${i}`, style: { fontSize: 13, lineHeight: 1.7, marginBottom: 6 } },
-                    t.value,
-                  ),
-                ),
-              )
-            : null,
+          // ── 「上一棒留下的」那一栏 2026-10-27 整栏下线 ──
+          // 注入层（persona.mjs）和固化侧（consolidate.mjs）都删了，
+          // 面板这里跟着删 —— 不然界面上还挂着一栏，插件却不认它了。
+          // 档案里那些 about="self" 的 trait 一个字没删，只是不再显示。
 
           // 「我还欠着他的」那一栏随功能一起删了（2026-10-24）。
 

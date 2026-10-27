@@ -127,13 +127,17 @@ salience 是"以后值不值得想起来"，0~1。
 
 【印象】
 
-traits 分两种，用 about 区分：
-- about="user"：他是什么样的人
-- about="self"：我该怎么做
+traits 只记一种：**他是什么样的人**（about 一律填 "user"）。
 
-判据一句话：**这句话能不能填进「他是个 ___ 的人」？填不进去的一律 self。**
-哪怕是他要求的也一样 —— "他让我先问细节"记成 self（那是我的做法），
-"他喜欢一层层追问到底"才是 user（那是他的脾气）。
+判据一句话：**这句话能不能填进「他是个 ___ 的人」？填不进去的就别写。**
+
+哪怕是他提的要求也一样：「他让我先问细节」不是印象（那是我的做法），
+「他喜欢一层层追问到底」才是（那是他的脾气）。
+
+⚠️ 2026-10-27 改：原来还有一类 about="self"（"我该怎么做"），**整类下线了**。
+那种东西是纪律不是印象 —— 它在「写下」那一刻起作用，不在「读到」的时候。
+写下来只会变成一张褪色的旧告示，除了让我事后说一句「又犯了」没有别的用。
+**别再产出 self，产了会被丢掉。**
 
 【词汇】
 
@@ -595,24 +599,23 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
     );
   }
 
-  // —— 关系：印象（带画面）——
+  // about 现在**只有 user**。
   //
-  // 关键是 evidence：一句话说清"哪一次让我有了这个印象"。
-  // 没有画面的 trait 读起来就是"用户说明书"，而不是日记 —— 这是这个项目
-  // 最容易退化成"宪法"的地方，所以 evidence 在这里是硬要求，不是可选装饰。
+  // 2026-10-27：`about="self"`（"我该怎么做"）整类下线 —— 注入里那一栏（「上一棒
+  // 留下的」）也一起删了。理由见 persona.mjs 里那段注释：那种东西是纪律不是印象，
+  // 它在「写下」那一刻起作用，读到的时候只是一张褪色的旧告示。
   //
-  // about="self" 是**我给自己定的规矩**，必须和"他对我的印象"分开存。
-  // 早期版本把"没落盘前不假装记得"渲染在了"他："下面 —— 那是逻辑错误，
-  // 也是一眼就能看出的"说明书味"。
+  // 所以这里**主动丢掉模型送来的一切 self**，别指望提示词一直守规矩。
   if (rel && Array.isArray(rel.traits)) {
     for (const t of rel.traits.slice(0, 8)) {
       if (!t || typeof t.key !== 'string' || typeof t.value !== 'string') continue;
+      if (t.about === 'self') continue;
       const key = t.key.trim().slice(0, 32);
       const value = t.value.trim().slice(0, 120);
       if (key === '' || value === '') continue;
 
       const evidence = typeof t.evidence === 'string' ? t.evidence.trim().slice(0, 160) : '';
-      const about = t.about === 'self' ? 'self' : 'user';
+      const about = 'user';
       const delta = clamp(t.delta, 0, 3, 1);
 
       const existing = next.relationship.traits.find((x) => x.key === key && x.about === about);

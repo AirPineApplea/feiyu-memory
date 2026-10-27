@@ -380,12 +380,10 @@ test('persona: 自己的规矩和他人的印象分开 —— 不能混在「他
     now: NOW,
   });
   assert.ok(r.text.includes('我对他的一些印象'));
-  assert.ok(r.text.includes('上一棒留下的'));
-  // 规矩不能出现在印象那一段里
-  const impStart = r.text.indexOf('我对他的一些印象');
-  const ruleStart = r.text.indexOf('上一棒留下的');
-  assert.ok(impStart < ruleStart);
-  assert.ok(!r.text.slice(impStart, ruleStart).includes('不假装记得'), '规矩串到印象里了');
+  // 2026-10-27：那一栏整栏下线 —— 它除了让人事后说一句"又犯了"没有别的用。
+  assert.ok(!r.text.includes('上一棒留下的'), '那一栏删了，注入里不该还有它');
+  assert.ok(!r.text.includes('不假装记得'), 'self 规矩不该出现在注入里');
+  assert.ok(r.text.includes('讨厌铺垫'), 'user 印象必须还在');
 });
 
 /* ── 身份声明：告诉读者这堆字是谁的 ── */
@@ -590,7 +588,7 @@ test('apply: 寒暄不再是「无效信息」—— 低 salience 也能留下�
   assert.equal(r.archive.diary.length, 1);
 });
 
-test('apply: 印象带上画面与归属，且 about 不同算两条', () => {
+test('apply: 印象只收 user —— self 整类丢掉', () => {
   const a = createEmptyArchive(NOW, 'x');
   const r = applyConsolidation(
     a,
@@ -606,10 +604,12 @@ test('apply: 印象带上画面与归属，且 about 不同算两条', () => {
     { now: NOW },
   );
   const t = r.archive.relationship.traits;
-  assert.equal(t.length, 2);
-  assert.equal(t.find((x) => x.key === '铺垫').evidence, '我说了三段他说说重点');
-  assert.equal(t.find((x) => x.key === '铺垫').about, 'user');
-  assert.equal(t.find((x) => x.key === '诚实').about, 'self');
+  // 2026-10-27：about="self" 整类下线，别指望提示词一直守规矩 —— 这里主动丢。
+  assert.equal(t.length, 1, 'self 那条该被丢掉，实际留下 ' + t.length + ' 条');
+  assert.equal(t[0].key, "铺垫");
+  assert.equal(t[0].evidence, "我说了三段他说说重点");
+  assert.equal(t[0].about, "user");
+  assert.equal(t.find((x) => x.key === "诚实"), undefined, "self 不该被存下来");
 });
 
 test('apply: 加固时不会把已有的画面清空', () => {

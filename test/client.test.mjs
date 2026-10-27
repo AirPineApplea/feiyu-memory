@@ -270,8 +270,9 @@ test('client: 拿到数据后把日记、印象、规矩都渲染出来', async 
   assert.match(out, /认识 3 天/, '关系事实');
   assert.match(out, /讨厌铺垫/, '印象');
   assert.match(out, /他直接说/, '印象必须带画面');
-  assert.match(out, /上一棒留下的/, '规矩单独一栏，且措辞跟注入层一致');
-  assert.match(out, /不假装记得/, '规矩内容');
+  // 2026-10-27：「上一棒留下的」那一栏整栏下线（注入层、固化侧、面板一起）。
+  assert.doesNotMatch(out, /上一棒留下的/, '那一栏已经删了');
+  assert.doesNotMatch(out, /不假装记得/, 'self 规矩不该再显示');
   // 「我还欠着他的」那一栏随功能删除（2026-10-24）。
   assert.doesNotMatch(out, /还欠着他的/, '这一栏已经删了');
   assert.match(out, /他翻出一篇小说给我看/, '日记正文');
