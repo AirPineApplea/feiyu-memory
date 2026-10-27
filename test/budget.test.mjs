@@ -104,3 +104,56 @@ test('预算分配: 只装得下人格时要能降级，不许抛错', () => {
   const t = render(200).text ?? '';
   assert.ok(estimateTokens(t) <= 200);
 });
+
+/* ═════════ 最近的事：平时让预算管，两个时刻整段重灌 ═════════ */
+
+test('pinRecent: 不打标时，「最近的事」照样受预算管（会被裁）', () => {
+  const many = Array.from({ length: 8 }, (_, i) => ({
+    id: 'e' + i,
+    kind: 'chat',
+    text: ('第' + i + '件事：') + '这是一段挺长的事情描述，用来把预算吃满。'.repeat(6),
+    salience: 0.7,
+    created_at: Date.now() - i * 3600000,
+  }));
+  const r = renderMemoryBlock({
+    persona: '', relationship: {}, lexicon: { items: [] }, notes: [],
+    recent: many, recalled: [], handNotes: [], handNoteHint: '',
+    includePersona: true, budget: 400, now: Date.now(),
+  });
+  const shown = ((r.text ?? '').match(/^- (今天|昨天|\d+ 天前)：/gm) ?? []).length;
+  assert.ok(shown < 8, '不打标时不该 8 条全进来，实际 ' + shown);
+  assert.ok(r.tokens <= 400, '不该超预算，实际 ' + r.tokens);
+});
+
+test('pinRecent: 打标后 8 条全灌，而且**允许超预算** —— 它是补上下文，不是常年陪跑', () => {
+  const many = Array.from({ length: 8 }, (_, i) => ({
+    id: 'e' + i,
+    kind: 'chat',
+    text: ('第' + i + '件事：') + '这是一段挺长的事情描述，用来把预算吃满。'.repeat(6),
+    salience: 0.7,
+    created_at: Date.now() - i * 3600000,
+  }));
+  const r = renderMemoryBlock({
+    persona: '', relationship: {}, lexicon: { items: [] }, notes: [],
+    recent: many, recalled: [], handNotes: [], handNoteHint: '',
+    includePersona: true, budget: 400, now: Date.now(), pinRecent: true,
+  });
+  const shown = ((r.text ?? '').match(/^- (今天|昨天|\d+ 天前)：/gm) ?? []).length;
+  assert.equal(shown, 8, '8 条必须全在，实际 ' + shown);
+  assert.ok(r.tokens > 400, '整段重灌本来就该超预算，实际 ' + r.tokens);
+});
+
+test('pinRecent: 关掉它，行为跟以前一模一样（不许偷偷常驻）', () => {
+  const r1 = renderMemoryBlock({
+    persona: '# 我是谁\n我是鱼。', relationship: {}, lexicon: { items: [] }, notes: [],
+    recent: [{ id: 'a', kind: 'chat', text: '一件事。', created_at: Date.now() }],
+    recalled: [], handNotes: [], handNoteHint: '', includePersona: true, budget: 3000, now: Date.now(),
+  });
+  assert.match(r1.text, /最近的事：/);
+  const r2 = renderMemoryBlock({
+    persona: '# 我是谁\n我是鱼。', relationship: {}, lexicon: { items: [] }, notes: [],
+    recent: [{ id: 'a', kind: 'chat', text: '一件事。', created_at: Date.now() }],
+    recalled: [], handNotes: [], handNoteHint: '', includePersona: true, budget: 3000, now: Date.now(), pinRecent: false,
+  });
+  assert.equal(r2.text, r1.text, 'pinRecent:false 必须跟不传一模一样');
+});

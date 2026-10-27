@@ -98,8 +98,21 @@ export function renderMemoryBlock(input = {}) {
   // 最近发生的事本来就在脑子里，只有旧事才需要被提醒。
   // 早期版本把最近的日记也塞进"突然想起来"，等于逼它假装刚刚想起
   // 一件昨天的事 —— 又假又占不到位置。
-  const recent = renderRecent(input.recent, input.recalled, now);
-  if (recent) parts.push({ key: 'recent', text: recent, weight: 80 });
+  //
+  // ── 2026-10-27：改成「按需全灌」──
+  //
+  // 它原来是每轮常驻、并且跟别人抢预算 —— 实测最惨的时候准备了 8 条只进来 1 条。
+  // 而它真正的用处只有两个时刻：**新会话第一轮**（上下文是空的，这 8 条是唯一
+  // 告诉它"我们上次在干什么"的东西）和**上下文刚被压缩之后**（聊天记录被压掉了，
+  // 这 8 条还在）。
+  //
+  // 那两次由宿主在 `pinRecent: true` 里给，**这 8 条不占 3000 的预算，整段挂外面** ——
+  // 因为它一进来就是"补上下文"，不是"常年陪跑"。
+  const pinnedRecent = input.pinRecent === true ? renderRecent(input.recent, input.recalled, now) : '';
+  if (pinnedRecent === '') {
+    const recent = renderRecent(input.recent, input.recalled, now);
+    if (recent) parts.push({ key: 'recent', text: recent, weight: 80 });
+  }
 
   const memories = renderRecalled(input.recalled, now);
   // ⚠️ **召回这一栏也必须有保底。**
@@ -146,7 +159,11 @@ export function renderMemoryBlock(input = {}) {
       : '';
   const tail = hint === '' ? '' : `\n\n${hint}`;
 
-  if (parts.length === 0 && tail === '') return { text: '', tokens: 0, dropped: [], trimmed: [] };
+  // ⚠️ 这个提前返回一定要把 `pinnedRecent` 算进来 —— 否则"只有免预算那段、别的都空"
+  // 的情况下整块会静默变成空字符串（pinRecent 的测试就是被这个抓到的）。
+  if (parts.length === 0 && tail === '' && pinnedRecent === '') {
+    return { text: '', tokens: 0, dropped: [], trimmed: [] };
+  }
 
   // 按权重降序装入；权重相同的保持原顺序（人格在前）
   const ordered = parts
@@ -245,7 +262,8 @@ export function renderMemoryBlock(input = {}) {
   const build = (kept) => {
     // 内容全被裁掉、但还有那句"想留话"的指针时，也要输出 ——
     // 那句话本身就是这条通道的发现渠道，不能被预算顺手带走。
-    if (kept.length === 0 && tail === '') return '';
+    // 同理：`pinRecent` 那种"补上下文"的整段是免预算的，它一个人也该撑起这个块。
+    if (kept.length === 0 && tail === '' && pinnedRecent === '') return '';
 
     // ⚠️ 这里踩过一次：原来写的是
     //     const middle = body === '' ? '' : `${body}${tail}`;
@@ -255,28 +273,34 @@ export function renderMemoryBlock(input = {}) {
     const pieces = [];
     const body = kept.map((p) => p.text).join('\n\n');
     if (body !== '') pieces.push(body);
+    // 免预算的那一整段（目前只有"新会话/压缩后"的最近 8 条）
+    if (pinnedRecent !== '') pieces.push(pinnedRecent);
     if (tail !== '') pieces.push(tail.trim());
 
     const middle = pieces.join('\n\n');
     return `${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n${middle === '' ? '' : `${middle}\n\n`}${CLOSE_TAG}`;
   };
 
-  // 帧本身的开销（含分隔符、不参与预算的声明、以及那句指针）
+  // 帧本身的开销（含分隔符、不参与预算的声明、以及那句指针）。
+  // **`pinnedRecent` 故意不算进来**：它那一段是免预算的，见上面 push 那段注释。
   let bodyBudget = Math.max(
     0,
     budget - estimateTokens(`${OPEN_TAG}\n\n${IDENTITY_DECLARATION}\n\n\n\n${tail}${CLOSE_TAG}`),
   );
+  // 免预算那一段自己有大小，收敛判断的容差要把它加回去
+  const allowance = budget + estimateTokens(pinnedRecent);
   let result = assemble(bodyBudget);
   let text = build(result.kept);
 
   // 量到真的不超为止（最多几轮，必然收敛）
   for (let guard = 0; guard < 6 && text !== ''; guard++) {
     const total = estimateTokens(text);
-    if (total <= budget) break;
-    bodyBudget -= total - budget + 2;
+    if (total <= allowance) break;
+    bodyBudget -= total - allowance + 2;
     if (bodyBudget <= 0) {
+      // 预算装不下正文了，但免预算那段和指针还得在 —— 它们不是"正文"
       result = { kept: [], dropped: parts.map((p) => p.key), trimmed: result.trimmed };
-      text = '';
+      text = build([]);
       break;
     }
     result = assemble(bodyBudget);

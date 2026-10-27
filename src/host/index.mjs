@@ -425,6 +425,8 @@ export function apply(ctx, rawConfig) {
         lastShownTurn: new Map(),
         suppressedUntil: -1,
         queued: false,
+        /** 上下文刚被压缩过：下一轮要把最近的事整段重灌一次（免预算） */
+        needsRecentReplay: false,
       };
       sessionStates.set(sessionId, s);
     }
@@ -792,6 +794,10 @@ export function apply(ctx, rawConfig) {
         // 读不到就当没有 —— 绝不因为手记坏了挡住记忆
       }
 
+      // 只有这两个时刻把「最近的事」整段重灌：**新会话第一轮**，或**刚被压缩过**。
+      // 其余每轮都不灌 —— 它已经进了历史，看得见，再灌一遍就是重复占地方。
+      const pinnedOnce = s.turn <= 1 || s.needsRecentReplay;
+
       const rendered = renderMemoryBlock({
         persona: archive.persona,
         relationship: { ...archive.relationship, since: archive.manifest.created_at },
@@ -799,6 +805,15 @@ export function apply(ctx, rawConfig) {
         recent,
         recalled: chosen,
         handNotes,
+        // ── 「最近的事」什么时候整段重灌（免预算）──
+        //
+        // 只有两个时刻：**新会话第一轮**（上下文是空的，这 8 条是唯一告诉它
+        // "我们上次在干什么"的东西），和**上下文刚被压缩之后**（聊天记录被压掉了，
+        // 这 8 条还在）。其余每轮都不灌 —— 它已经进了历史，看得见。
+        //
+        // 2026-10-27 改。之前是每轮常驻、跟别人抢预算，实测最惨时准备 8 条只进来 1 条，
+        // 而且那 8 条全是"我们刚才在讨论插件"的会议纪要 —— 八条零个日子。
+        pinRecent: pinnedOnce,
         // 这句是给检索工具留的指针。**只注册工具不够** ——
         // 工具一多就被淹，模型急起来想不起去查。这句在「帧」里、不进预算池，
         // 所以不会像栏目那样被裁掉。
@@ -810,8 +825,13 @@ export function apply(ctx, rawConfig) {
         now: Date.now(),
       });
       text = rendered.text;
+      // 重灌只用一次：这一轮灌过，下一轮就回到"不灌"。
+      // 不在这里清的话，压缩一次会永远灌下去 —— 那又变回"每轮常驻"了。
+      if (pinnedOnce) s.needsRecentReplay = false;
       log(
-        `会话 ${sessionId} 第 ${s.turn} 轮：最近 ${recent.length} 条在场 · 想起 ${chosen.length} 条` +
+        `会话 ${sessionId} 第 ${s.turn} 轮：最近 ${recent.length} 条在场` +
+          (pinnedOnce ? '（整段重灌，免预算）' : '') +
+          ` · 想起 ${chosen.length} 条` +
           ` · 注入 ${rendered.tokens} token` +
           (rendered.dropped.length > 0 ? ` · 裁掉 ${rendered.dropped.join('/')}` : ''),
       );
@@ -900,6 +920,21 @@ export function apply(ctx, rawConfig) {
         if (SUPPRESS_RE.test(text)) s.suppressedUntil = s.turn;
         s.transcript.push({ role: 'user', text });
         if (s.transcript.length > 40) s.transcript.splice(0, s.transcript.length - 40);
+        return;
+      }
+
+      // ── 上下文刚被压缩 ──
+      //
+      // 压缩会把聊天记录揉成一段摘要，**「最近的事」那 8 条是压缩之后还剩下的
+      // 那部分"我们上次在干什么"**。所以压缩完要再给它灌一次。
+      //
+      // DSH 没有专门的"压缩完成"事件，但压缩会在会话日志里留一条
+      // `compaction/summary`，而 `session/event` 是每次写盘后的事后通知 ——
+      // 从这里看得到。详见 persona.mjs 里 pinRecent 那段注释。
+      if (typeof event?.type === 'string' && event.type.startsWith('compaction/')) {
+        s.needsRecentReplay = true;
+        s.renderCache = { turn: -1, text: '' };
+        log(`会话 ${id} 的上下文被压缩了（${event.type}），下一轮重灌最近的事`);
         return;
       }
 
