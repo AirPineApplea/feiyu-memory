@@ -1224,7 +1224,8 @@ export function apply(ctx, rawConfig) {
     // 成 138 / 232 / 309 字三张快照，讲的是同一件事，占掉「最近的事」三个位。
     // 所以：同一个 session、轮数差在窗口内、而且还没到 appendMaxChars，
     // 就把上一条一起给模型，让它只写"多出来的那部分"。
-    const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWindowTurns : 4;
+    // 默认从 4 调到 20（2026-10-27）。4 轮太窄：实测五分钟里写了三条同一件事。
+const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWindowTurns : 20;
     const appendMax = DEFAULT_CONSOLIDATION.appendMaxChars;
     const lastEvent = [...archive.diary]
       .reverse()

@@ -933,3 +933,19 @@ test('budget: 估算与实际渲染自洽', () => {
   });
   assert.equal(r.tokens, estimateTokens(r.text));
 });
+
+/* ═════════ 续写窗口：可配，而且默认调宽了 ═════════ */
+
+test('config: appendWindowTurns 默认 20，0 表示关掉，越界被钳住', () => {
+  // 2026-10-27：这一项原来硬编码在 host 里（4 轮），配置里没有 —— 谁也调不了。
+  // 实测 8 小时写 25 条，其中 15 条来自同一会话，间隔有 1/1/3/3/4/4/5 分钟的。
+  assert.equal(resolveConfig({}).appendWindowTurns, 20);
+  assert.equal(resolveConfig({ appendWindowTurns: 0 }).appendWindowTurns, 0, '0 = 关掉合并');
+  assert.equal(resolveConfig({ appendWindowTurns: 999 }).appendWindowTurns, 200, '上限钳制');
+  assert.equal(resolveConfig({ appendWindowTurns: -5 }).appendWindowTurns, 0, '负数钳到 0');
+});
+
+test('consolidate: 续写后的条目上限是 400 字（原来是 500）', () => {
+  // 跟「日记一条 200 字」配套：续写要有余地，但别撑到 500。
+  assert.equal(DEFAULT_CONSOLIDATION.appendMaxChars, 400);
+});

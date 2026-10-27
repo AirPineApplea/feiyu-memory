@@ -193,7 +193,7 @@ export const DEFAULT_CONSOLIDATION = Object.freeze({
    *
    * 续写让"一件事 = 一条日记"；上限让它不会长成一篇。
    */
-  appendMaxChars: 500,
+  appendMaxChars: 400,
   /**
    * 续写兜底：新旧两条的相似度到这个数，就当成"同一件事的加长版"，
    * 用新的替换旧的（而不是新建一条）。
