@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderMemoryBlock, MAX_NOTES } from '../src/core/persona.mjs';
+import { renderMemoryBlock } from '../src/core/persona.mjs';
 import { estimateTokens } from '../src/core/tokenize.mjs';
 
 /** 造一条长度接近真实日记的文本（约 400 字，真实档案里单条常常两百到三百字） */

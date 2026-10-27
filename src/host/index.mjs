@@ -43,7 +43,7 @@ import { SUPPRESS_RE } from '../core/gate.mjs';
 import { buildIndex, selectMemories, searchScores, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
-import { renderMemoryBlock, DEFAULT_BUDGET, MAX_NOTES } from '../core/persona.mjs';
+import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
 import { calendarDaysBetween, stripTimeWords, softWhen } from '../core/timeline.mjs';
 import { renderDiaryFile } from '../core/render-diary.mjs';
 import { buildJudgeInput, parseVerdict, JUDGE_MAX_TOKENS } from '../core/judge.mjs';
@@ -669,15 +669,6 @@ export function apply(ctx, rawConfig) {
   /* ── 注入 ── */
 
   /**
-   * 「主动记一条」的工具名。
-   *
-   * 声明在这里（而不是跟工具定义放一起），是因为 `renderFor` 要把它写进
-   * 注入里的那句提示。**放在后面虽然在运行时也能用（TDZ 只在 apply 早期
-   * 才可能触发），但太脆** —— 谁把 renderFor 提早调一次就炸。
-   */
-  const NOTE_TOOL_NAME = 'feiyu_note';
-
-  /**
    * 「去档案里找一句」的工具名。
    *
    * 为什么要它：注入的召回是**系统替它猜**（拿你这一轮的字面去匹配），
@@ -714,45 +705,29 @@ export function apply(ctx, rawConfig) {
       // 块本身按轮缓存，所以这个读一turn一次，跟手记那条一样便宜。
       syncPersonaFromDisk();
 
-      // ── 判断和事件，分开放 ──
+      // ── 判断（`kind: "note"`）**2026-10-27 整栏下线** ──
       //
-      // 这是这次改动的核心。**内容早就在了，只是放错了格子。**
+      // 原来这里把 note 条目分成两截：最近几条渲染成「我自己想的」，
+      // 更早的丢进召回池。整栏和小工具 `feiyu_note` 都不要了，理由见
+      // persona.mjs 里那段注释（四条全是「我该怎么干」，没有一条「他是什么人」）。
       //
-      // `feiyu_note` 写出来的东西（"别把前一种的辛苦当成功德"）是**判断**，
-      // 不是事件，却一直被当成事件渲染在「最近的事」里，格式跟流水账一模一样 ——
-      // 连我自己都分不出哪句是我写的。一位读者把这个毛病说得很准。
-      //
-      //   事件 → 「最近的事」/「突然想起来」（会被召回）
-      //   判断 → 「我自己想的」（永远在场，不进召回池）
-      //
-      // ⚠️ **"永远在场"这个前提在高频下失效了。** 判断段只放得下
-      // `MAX_NOTES` 条（8 → 4，因为 8 条会吃光预算、把日记段挤到 0%）。
-      // 被挤出窗口的判断如果还不进召回池，那就不是"以后想起来"，
-      // 是**彻底看不见** —— 而这个区是"是我"，丢了最可惜。
-      //
-      // 所以分流改成两截：
-      //   最近 MAX_NOTES 条 → 「我自己想的」（永远在场）
-      //   更早的那些        → **加入召回池**，相关时能被想起来
-      const allNotes = archive.diary.filter((e) => e?.kind === 'note');
-      // 渲染兜底：老条目在写入时可能没洗过（feiyu_note 的漏洞修之前写进来的），
-  // 但它们照样会进系统提示。这里按**只拦密钥**再过一遍 —— 不开第三方泛化，
-  // 免得把历史日记里的人名都糊掉。
-  const safeEntry = (e) => {
-    const r = scrub(e.text, { thirdParty: false });
-    return r.blocked ? { ...e, text: r.text } : e;
-  };
-  const events = archive.diary.map(safeEntry)
+      // 数据不动：档案里那 58 条 `kind: "note"` 留着，历史就是历史。
+      // 但它们**也不进召回池** —— 让「规矩」从别的栏目溜回来，等于没删干净。
+      const safeEntry = (e) => {
+        const r = scrub(e.text, { thirdParty: false });
+        return r.blocked ? { ...e, text: r.text } : e;
+      };
+      const events = archive.diary.map(safeEntry)
       .filter((e) => e?.kind !== 'note')
       // 续写过的条目 created_at 没动，但它是"刚写过的" —— 排序得看 updated_at，
       // 否则刚补完的那条会按原始时间沉下去。
       .sort((a, b) => (a.updated_at ?? a.created_at) - (b.updated_at ?? b.created_at));
-      const shownNotes = allNotes.slice(-MAX_NOTES);
 
       // 「最近的事」—— 按时间取最近的几条，不走相似度。
       // 这是让注入区读起来像日记而不是像检索结果的关键：
       // 最近发生的事本来就在脑子里，不需要被"想起来"。
       //
-      // 取的是 **events**，不是整个日记 —— 判断归「我自己想的」管。
+      // 取的是 **events**，不是整个日记 —— 判断（`kind: "note"`）那一栏已经下线，不渲染。
       const recentCount = Number.isFinite(config.recentEntries) ? config.recentEntries : 8;
       const recent = recentCount > 0 ? events.slice(-recentCount) : [];
       const recentIds = new Set(recent.map((e) => e.id));
@@ -770,11 +745,10 @@ export function apply(ctx, rawConfig) {
       //
       // 排除之后：同一句话会去挑真正的旧事（实测赛博朋克那条命中了
       // 「边缘行者2 上线，总导演从今石之洋换成五十岚海」）。
-      const olderNotes = allNotes.slice(0, -MAX_NOTES);
-      const recallPool = [
-        ...events.filter((e) => !recentIds.has(e.id)),
-        ...olderNotes,
-      ];
+      //
+      // 2026-10-27：`olderNotes` 也撤了 —— 判断那一栏整体下线，它的历史条目
+      // 不该从召回池绕回来（那等于把「规矩」换个栏目塞回去）。
+      const recallPool = events.filter((e) => !recentIds.has(e.id));
 
       const { chosen } = selectMemories(recallPool, index, query, s, s.turn, {
         highSim: config.highSim,
@@ -800,21 +774,15 @@ export function apply(ctx, rawConfig) {
         persona: archive.persona,
         relationship: { ...archive.relationship, since: archive.manifest.created_at },
         lexicon: archive.lexicon,
-        // 第三区：**我自己想的**（判断）。最近几条永远在场，
-        // 更早的那些走召回（见上面 allNotes 的分流）。
-        notes: shownNotes,
         recent,
         recalled: chosen,
         handNotes,
-        // 这句是**唯一**能让别的肥鱼知道"可以主动记"的渠道 ——
-        // 它们每轮都会读到这块记忆，不会去翻文档。
-        //
-        // 第二句同理：给检索工具留个指针。**只注册工具不够** ——
+        // 这句是给检索工具留的指针。**只注册工具不够** ——
         // 工具一多就被淹，模型急起来想不起去查。这句在「帧」里、不进预算池，
         // 所以不会像栏目那样被裁掉。
-        handNoteHint:
-          `想给后面的我留话，用 ${NOTE_TOOL_NAME} 工具说一声就行 —— 不用管格式，也别为了记事去动文件。\n` +
-          `想不起来某件事时，用 ${RECALL_TOOL_NAME} 去档案里找一下 —— 用当时的词，越具体越准。`,
+        //
+        // 2026-10-27：给 `feiyu_note` 的那半句删了 —— 工具本身也下线了。
+        handNoteHint: `想不起来某件事时，用 ${RECALL_TOOL_NAME} 去档案里找一下 —— 用当时的词，越具体越准。`,
         includePersona: config.includePersona,
         budget: config.budgetTokens,
         now: Date.now(),
@@ -1741,150 +1709,19 @@ export function apply(ctx, rawConfig) {
     }, 'feiyu: 面板数据接口');
   });
 
-  /* ── 主动记一条：给鱼用的工具 ── */
-
-  /**
-   * 固化那条路是**插件自己判断 + 模型生成**的。这个工具是另一条：
-   * **哪一棒想到了什么，自己说一声就记下。**
-   *
-   * 【为什么是工具，而不是让鱼去写文件】
-   * 一开始我设计的是让鱼直接往 `日记/*.jsonl` 追加。那条路有两个洞：
-   *
-   *  1. **静默丢数据** —— `archiveToFiles()` 是整份重建，内存副本会把
-   *     外部追加的行整份盖掉，没有报错。
-   *  2. **`id` 漏了就撞车** —— `normalizeDiaryEntry` 里是 `id: String(raw.id)`，
-   *     少写就变成字符串 "undefined"，两条日记同 id，删一条删两条。
-   *
-   * 交给插件办，这两个洞都不存在 —— 鱼只管说话，格式、id、关键词、
-   * 写盘全由这里负责。**鱼不该为了记事去操作文件系统。**
-   *
-   * 【为什么不做成"进后台队列"】
-   * 用户的说法是"不是自己切后台搞"。所以这里是**当场写**：
-   * 工具调用返回之前，条目已经落盘，下一轮注入里就有。
-   * 不进带外队列、不等低峰时段 —— 那是固化那条路的事。
-   *
-   * 定义形状是手写的 JSON Schema（`defineTool` 转出来的就是这个形状），
-   * 因为**我们不能 import `@deepseek-ai/dsh-tools`**（零依赖铁律）。
-   * 名字 `NOTE_TOOL_NAME` 声明在 renderFor 那边 —— 注入里要引用它。
-   */
-
+  /* ── 检索工具：只读，不碰档案 ── */
+  //
+  // 2026-10-27：原来这里还有一个 `feiyu_note`（主动记一条）。
+  // 它和「我自己想的」那一栏一起下线 —— 那栏里四条全是「我该怎么干」，
+  // 一条「他是什么人」都没有。档案里那 58 条 `kind: "note"` 留着，不动。
+  //
+  // 为什么不复用 selectMemories 那套"选秀"逻辑（权重、冷却、走神、maxShow）：
+  // 那是给**每轮自动注入**设计的，要在"没人问"的情况下替它挑。
+  // 而工具是**它自己发起**的查询 —— 它知道自己在找什么，
+  // 所以直接按相似度排、取前 N 条，不设 salience 门槛。
+  //
+  // 明确要找，就该找得到，不管那件旧事淡到什么程度。
   ctx.inject(['tools'], (scope) => {
-    scope.effect(
-      () =>
-        scope.tools.register({
-          name: NOTE_TOOL_NAME,
-          description:
-            '给自己留一条记忆。想到了什么值得让后面的我记得的，直接写进来就行 —— 不用管格式，也不要为了记事去动任何文件。' +
-            '不适合记的：能从档案里推出来的、一次性的技术细节、对别人的评价。',
-          parameters: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              text: {
-                type: 'string',
-                description:
-                  '一句话，第一人称，像跟后面的自己说话。**不要写"今天/昨天"这类时间词**（时间由系统另外标注）。',
-              },
-              tags: {
-                type: 'array',
-                items: { type: 'string' },
-                description: '可选，两三个词，用来日后检索。',
-              },
-            },
-            required: ['text'],
-          },
-          output: {
-            schema: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                ok: { type: 'boolean' },
-                id: { type: 'string' },
-                count: { type: 'integer' },
-              },
-            },
-            render: (_args, value) =>
-              value?.ok === true
-                ? [{ type: 'text', text: `记住了。（档案里现在 ${value.count} 条）` }]
-                : [{ type: 'text', text: '没记成。' }],
-          },
-
-          async execute(args, exec) {
-            await loadPromise;
-            if (!ready) {
-              // 档案坏了就说实话，别假装记下了（SPEC §10 降级优先）
-              throw new Error('档案现在读不了（可能是坏的），这条没记下。');
-            }
-            const raw = typeof args?.text === 'string' ? args.text.trim() : '';
-            if (raw === '') throw new Error('要记什么？text 不能是空的。');
-
-            // ⚠️ **这里必须过隐私闸。**
-            //
-            // 审计报告（F1，P1）：`scrub()` 原来只在固化那条路调用，
-            // 而 feiyu_note 是"模型自己说一句、直接落盘"的写入口 ——
-            // 用户刚贴的 key、手机号、人名会被原样写进 diary/*.jsonl，
-            // 然后**每一轮都随系统提示发给模型 provider**。
-            //
-            // 这直接违背 README 那句「密钥硬拦……绝不入档」。
-            // 而且它不是边角场景：模型说"记一下这个 key"是很自然的动作。
-            const scrubbed = scrub(raw, {
-              thirdParty: config.thirdPartyRedaction !== false,
-              amountThreshold: config.amountThreshold,
-            });
-            if (scrubbed.blocked) {
-              log(`主动记的那条命中了密钥规则，已替换（${scrubbed.hits.length} 处）`);
-            }
-            const now = Date.now();
-            const tags = (Array.isArray(args?.tags) ? args.tags : [])
-              .filter((t) => typeof t === 'string' && t.trim() !== '')
-              .map((t) => scrub(t.trim(), { thirdParty: false }).text.slice(0, 12))
-              .slice(0, 4);
-            if (tags.length === 0) tags.push('手记');
-
-            const sessionId = exec?.agent?.id;
-            const entry = normalizeDiaryEntry({
-              id: makeDiaryId(now, archive.diary),
-              // 洗过再截 —— 先截再洗会把半截密钥留在末尾
-              text: stripTimeWords(scrubbed.text.slice(0, 400)),
-              tags,
-              kind: 'note',
-              // 主动写下的东西比自动筛出来的更该被想起来，给高一档
-              salience: 0.7,
-              created_at: now,
-              ...(typeof sessionId === 'string' ? { session: sessionId } : {}),
-            });
-
-            archive.diary.push(entry);
-            index = buildIndex(archive.diary);
-            for (const s of sessionStates.values()) s.renderCache = { turn: -1, text: '' };
-            await persist();
-
-            // 和固化那条路一样：**只打形状，绝不打正文**
-            log(`主动记下一条 ${entry.id}（note），共 ${archive.diary.length} 条`);
-            return { ok: true, id: entry.id, count: archive.diary.length };
-          },
-
-          presentCall: (args) => ({
-            card: 'generic',
-            title: '记住一条',
-            kind: 'other',
-            rawInput: args,
-          }),
-        }),
-      'feiyu: note tool',
-    );
-    log(`已注册工具 ${NOTE_TOOL_NAME}`);
-
-    // ── 检索工具 ──
-    //
-    // 跟 feiyu_note 不一样的地方：**这里只读，不碰档案。**
-    //
-    // 为什么不复用 selectMemories 那套"选秀"逻辑（权重、冷却、走神、maxShow）：
-    // 那是给**每轮自动注入**设计的，要在"没人问"的情况下替它挑。
-    // 而工具是**它自己发起**的查询 —— 它知道自己在找什么，
-    // 所以直接按相似度排、取前 N 条，不设 salience 门槛。
-    //
-    // 明确要找，就该找得到，不管那件旧事淡到什么程度。
     scope.effect(
       () =>
         scope.tools.register({

@@ -1010,147 +1010,9 @@ test('panel: 没有 webServer 服务时安静跳过，不影响插件其余部�
  * 工具返回之前条目就该在档案里。
  */
 
-const callNote = (h, args, agentId = 's_test') =>
-  h.tools.get('feiyu_note').execute(args, {
-    agent: agentId === null ? undefined : { id: agentId },
-    signal: new AbortController().signal,
-  });
-
-test('note: 工具注册上了，且描述里说清了"不要动文件"', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    const tool = h.tools.get('feiyu_note');
-    assert.ok(tool, 'feiyu_note 必须注册');
-    assert.match(tool.description, /不要为了记事去动任何文件/);
-    // 参数 schema 要是**标准 JSON Schema** —— 我们不能 import defineTool，
-    // 得自己产出它转出来的那个形状
-    assert.equal(tool.parameters.type, 'object');
-    assert.deepEqual(tool.parameters.required, ['text']);
-    assert.equal(tool.parameters.properties.text.type, 'string');
-    // output.render 返回 ContentBlock[]
-    const blocks = tool.output.render({}, { ok: true, count: 3 });
-    assert.deepEqual(blocks, [{ type: 'text', text: '记住了。（档案里现在 3 条）' }]);
-  });
-});
-
-test('note: 说一声就当场落盘 —— 不进后台队列', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    const svc = h.provided.get('feiyuMemory');
-    await svc.snapshot();
-
-    const r = await callNote(h, { text: '我决定不再把"记不清"说成"忘了"。' });
-    assert.equal(r.ok, true);
-    assert.equal(r.count, 1);
-
-    // 关键：**工具返回的时候，磁盘上就得已经有了**
-    const raw = await readFile(path.join(dataDirFor(home), 'diary', monthFile()), 'utf8');
-    assert.match(raw, /记不清/);
-    assert.match(raw, /"kind":"note"/);
-  });
-});
-
-test('note: 正文里的时间词会被摘掉（跟日记一个规矩）', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    await callNote(h, { text: '今天我想明白一件事：他其实不在乎我记不记得。' });
-    const svc = h.provided.get('feiyuMemory');
-    const snap = await svc.snapshot();
-    assert.ok(!snap.diary[0].text.startsWith('今天'), snap.diary[0].text);
-    assert.match(snap.diary[0].text, /^我想明白一件事/);
-  });
-});
-
-test('note: 空正文会被拒，不会记进一条空壳', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    await assert.rejects(() => callNote(h, { text: '   ' }), /不能是空的/);
-    await assert.rejects(() => callNote(h, {}), /不能是空的/);
-    assert.equal((await h.provided.get('feiyuMemory').snapshot()).diaryCount, 0);
-  });
-});
-
-test('note: 记下的东西当场就在注入里，而且进了「我自己想的」', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    await callNote(h, { text: '别人给的数据跟出处对不上时，先问，别照抄。' });
-
-    const agent = h.makeAgent('s_later');
-    h.emit('agent/created', { agent });
-    h.emit('session/event', { id: 's_later' }, userEvent('随便聊点什么', 1));
-    const injected = agent.sections[0].text();
-
-    assert.match(injected, /我自己想的：/, `判断该有自己的格子：${injected}`);
-    assert.match(injected, /先问，别照抄/);
-    // **不能**混进「最近的事」—— 这是这次改动的全部意义
-    assert.ok(
-      !/最近的事：[\s\S]*先问，别照抄/.test(injected),
-      `判断串进事件区了：${injected}`,
-    );
-  });
-});
-
-test('note: 判断不进召回池 —— 它本来就每轮都在，再被"想起来"是重复', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    // 一条判断，用词故意跟下面那句话高度重合
-    await callNote(h, { text: '先问再写，别照抄。' });
-
-    const agent = h.makeAgent('s_r');
-    h.emit('agent/created', { agent });
-    h.emit('session/event', { id: 's_r' }, userEvent('我是不是说过先问再写？', 1));
-    const injected = agent.sections[0].text();
-
-    assert.ok(!injected.includes('突然想起来：'), `判断不该被召回：${injected}`);
-  });
-});
-
-test('note: 没给 tags 时兜底成"手记"，给了就用给的', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    await callNote(h, { text: '第一条。' });
-    await callNote(h, { text: '第二条。', tags: ['自言自语', '约定'] });
-    const snap = await h.provided.get('feiyuMemory').snapshot();
-    assert.deepEqual(snap.diary[0].tags, ['手记']);
-    assert.deepEqual(snap.diary[1].tags, ['自言自语', '约定']);
-  });
-});
-
-test('note: 每条 id 都不一样（漏 id 会撞车，那是 jsonl 手写的老坑）', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    await callNote(h, { text: '第一条。' });
-    await callNote(h, { text: '第二条。' });
-    await callNote(h, { text: '第三条。' });
-    const snap = await h.provided.get('feiyuMemory').snapshot();
-    const ids = snap.diary.map((e) => e.id);
-    assert.equal(new Set(ids).size, 3, `id 撞车了：${ids.join(', ')}`);
-    assert.ok(ids.every((id) => id.startsWith('d_')), ids.join(', '));
-  });
-});
-
-test('note: 没有 tools 服务时安静跳过，记忆本身照常可用', async () => {
-  await withHome(async (home) => {
-    const h = makeHarness();
-    const orig = h.ctx.get;
-    h.ctx.get = (n) => (n === 'tools' ? undefined : orig(n));
-    apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
-    assert.equal(h.tools.size, 0, '没有 tools 服务就不该注册工具');
-    const svc = h.provided.get('feiyuMemory');
-    assert.ok(svc, '但记忆服务必须照常可用');
-    assert.equal((await svc.snapshot()).ready, true);
-  });
-});
-
-/* ─────────────── 手记（手写的那个文件） ─────────────── */
+/* ── 2026-10-27：`feiyu_note` 和「我自己想的」那一栏整栏下线，
+   这一组测试跟着删。档案里那 58 条 `kind: "note"` 不动，但不再渲染、
+   也不再进召回池 —— 理由见 persona.mjs 里那段注释。 ── */
 
 test('handnote: 首次运行会建一份带说明的手记文件', async () => {
   await withHome(async (home) => {
@@ -1189,7 +1051,10 @@ test('handnote: 用户写进去的原话，下一轮就出现在注入里', asyn
   });
 });
 
-test('handnote: 注入里带着"可以主动记"的指针 —— 这是唯一的发现渠道', async () => {
+test('handnote: 注入里带着"去翻档案"的指针 —— 这是唯一的发现渠道', async () => {
+  // 2026-10-27：原来这条测的是给 `feiyu_note` 的那半句提示。
+  // 那个工具（连同「我自己想的」那一栏）整栏下线了，指针只剩检索工具这一条。
+  // 断言的用意没变：**注入是唯一能让别的肥鱼知道工具存在的地方。**
   await withHome(async (home) => {
     const h = makeHarness();
     apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
@@ -1199,8 +1064,9 @@ test('handnote: 注入里带着"可以主动记"的指针 —— 这是唯一的
     h.emit('agent/created', { agent });
     h.emit('session/event', { id: 's_hint' }, userEvent('你好', 1));
     const injected = agent.sections[0].text();
-    assert.match(injected, /feiyu_note/, '不写这句，别的肥鱼根本不知道这条路存在');
-    assert.match(injected, /别为了记事去动文件/);
+    assert.match(injected, /feiyu_recall/, '不写这句，别的肥鱼根本不知道这条路存在');
+    assert.match(injected, /用当时的词/);
+    assert.ok(!injected.includes('feiyu_note'), '那个工具已经删了，指针不该还留着');
   });
 });
 
@@ -1244,14 +1110,35 @@ test('persona: 手动改完之后**落盘不会把它覆盖掉**', async () => {
 
     const file = path.join(dataDirFor(home), 'persona.md');
     const text = await readFile(file, 'utf8');
-    await writeFile(file, text.replace('## 说话方式', `## 说话方式\n\n${MARKER}`), 'utf8');
+    // 这一条带 seed，种子人格是 `# 测试人格`（**没有** `## 说话方式`）——
+    // 硬按那个标题替换根本替换不到，测试就会报"改动被覆盖了"，
+    // 而真相是压根没改进去。所以挑一个真的存在的锚点，
+    // 并且**改完先确认改动进了文件**。
+    const anchor = text.includes('## 说话方式') ? '## 说话方式' : '# 测试人格';
+    await writeFile(file, text.replace(anchor, `${anchor}\n\n${MARKER}`), 'utf8');
+    assert.match(await readFile(file, 'utf8'), /该皮的时候皮/, '前置条件：改动得先真的落进文件');
 
-    // 写一条日记 —— 这必然触发一次 persist（也就是整份重写）
-    await callNote(h, { text: '随便记一条，只为了触发落盘。' });
+    // 触发一次 persist（整份重写）。
+    //
+    // 2026-10-27：这里原来调 `feiyu_note`，那个工具下线了。改用面板的「忘掉」——
+    // 它走的是同一条 `persist()`，而被测的是「写盘会不会覆盖人的改动」，
+    // 跟用哪条路触发无关。
+    const st = JSON.parse((await h.callRoute('/feiyu-diary/state')).body);
+    const res = await h.callRoute('/feiyu-diary/forget', {
+      method: 'POST',
+      body: { id: st.diary[0].id },
+      headers: {
+        'content-type': 'application/json',
+        origin: 'http://127.0.0.1:1234',
+        host: '127.0.0.1:1234',
+        'sec-fetch-site': 'same-origin',
+      },
+    });
+    assert.equal(res.statusCode, 200, `触发落盘失败：HTTP ${res.statusCode} ${res.body}`);
 
     const after = await readFile(file, 'utf8');
     assert.match(after, /该皮的时候皮/, '**人的改动被覆盖了** —— 这个文件就白说可编辑了');
-  });
+  }, { seed: makeSeed() });
 });
 
 test('persona: 没人改的时候，落盘也不会把内存那份丢掉', async () => {
