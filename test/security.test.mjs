@@ -214,7 +214,9 @@ test('F5: 固化输出也要洗 —— 模型会照抄输入', () => {
 
   assert.equal(dump.includes('123456789012'), false, '整份档案里都不能有');
   assert.equal(r.archive.diary[0].text.includes('123456789012'), false, 'diary 正文不能有');
-  assert.equal(r.archive.relationship.traits[0].evidence.includes('123456789012'), false, 'evidence 不能有');
+  // 2026-10-27：traits 停止产出，洗 evidence 这条路径没有出口了 ——
+  // 但上面那句「整份档案里都不能有」仍然是真闸，它才是这条测试的本体。
+  assert.equal(r.archive.relationship.traits.length, 0, 'traits 不再写入');
 });
 
 test('F5: 洗输出不会弄坏其他字段', () => {
@@ -234,6 +236,7 @@ test('F5: 洗输出不会弄坏其他字段', () => {
   assert.equal(r.accepted, true, '正常的日记不该被洗坏');
   assert.equal(r.archive.diary[0].kind, 'chat');
   assert.equal(r.archive.diary[0].salience, 0.6);
-  assert.equal(r.archive.relationship.traits[0].about, 'user');
-  assert.ok(Array.isArray(r.archive.lexicon.items));
+  // 2026-10-27：traits / lexicon 都停止产出 —— 但字段还在（数据一个字没删）。
+  assert.equal(r.archive.relationship.traits.length, 0, 'traits 不再写入');
+  assert.ok(Array.isArray(r.archive.lexicon.items), '词表字段还在，只是不再新增');
 });

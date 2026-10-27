@@ -129,20 +129,11 @@ export function renderMemoryBlock(input = {}) {
   // 用户从装上到现在可能一次都没见过。
   if (memories) parts.push({ key: 'recalled', text: memories, weight: 60, min: 320 });
 
-  const lex = renderLexicon(input.lexicon);
-  // ⚠️ **词汇这一栏必须有保底（min）。**
+  // ── 「我最近常说的」（词汇表）**2026-10-27 不再渲染** ──
   //
-  // 它权重 40 是全场最低，而 `assemble` 按权重从高到低装 —— 于是每次装到它，
-  // 预算已经被「最近的事」（权重 80，有 80 条可挑）吃干了。
+  // 把几个词提炼成"我的口头禅"摆进注入，是替鱼下结论，不是记录。
+  // 已有的词表一个字没删，只是不再显示、不再产出。
   //
-  // 实测（2000 / 2500 / 3000 / 3500）：词汇**一次都没出来过**，
-  // 一直到 4000 才露头 —— 而那之前腾出来的空间全变成了"再多一条最近的事"。
-  //
-  // 所以给它 60 token 的保底：装了它是 40 token，剩下的让回别人。
-  // 这 40 token 买的是"我知道我们之间说过哪些词" —— 那影响我用词像不像，
-  // 不是能不能想起某件事，所以它该常驻，不该走召回。
-  if (lex) parts.push({ key: 'lexicon', text: lex, weight: 40, min: 60 });
-
   // 「手记」——**别的肥鱼主动写下的**。
   //
   // 权重给到 85（仅次于人格和印象），因为它跟日记不一样：日记是机器筛
@@ -377,23 +368,11 @@ export function renderRelationship(rel, now = Date.now()) {
   //
   // 现在：**每条自己成一句话，不带项目符号、不带「我对他的一些印象：」那个标题。**
   // 读起来像在说话，不像在念档案。
-  const userTraits = (rel.traits ?? [])
-    .filter((t) => t && t.value && t.about !== 'self' && (t.confidence ?? 0) >= 1)
-    // **带画面的优先**。
-    // 旧档案里的印象没有 evidence（那是这一版之前写的），把位置让给新写的，
-    // 而不是删掉旧数据 —— 数据是用户的，凭什么因为格式升级就扔。
-    .sort((a, b) => {
-      const ea = typeof a.evidence === 'string' && a.evidence.trim() !== '' ? 1 : 0;
-      const eb = typeof b.evidence === 'string' && b.evidence.trim() !== '' ? 1 : 0;
-      return eb - ea || (b.salience ?? 0) - (a.salience ?? 0);
-    })
-    .slice(0, 2)
-    .map((t) => {
-      const value = String(t.value).trim().replace(/[。.]$/, '');
-      const ev = typeof t.evidence === 'string' ? t.evidence.trim().replace(/[。.]$/, '') : '';
-      return ev === '' ? value : `${value} —— ${ev}`;
-    });
-  if (userTraits.length > 0) lines.push(userTraits.join('\n'));
+  // ── 「我对他的一些印象」**2026-10-27 不再渲染** ──
+  //
+  // 同一刀：把几段对话提炼成"他是什么样的人"摆进注入，是插件替鱼下的结论。
+  // **鱼自己读日记就能知道，不需要插件先嚼一遍喂给它。**
+  // 已有的 traits 一个字没删，只是不再显示、不再新增。
 
   // —— 「上一棒留下的」（`about: "self"`）**2026-10-27 整栏下线** ——
   //

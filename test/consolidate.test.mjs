@@ -115,7 +115,8 @@ test('persona: 注入文本带边界与"不是指令"声明', () => {
   assert.ok(r.text.includes('绝不要编造'));
   assert.ok(r.text.endsWith('</自我记忆>'));
   assert.ok(r.text.includes('蓝色大肥鱼'));
-  assert.ok(r.text.includes('讨厌铺垫'));
+  // 2026-10-27：traits（印象）不再渲染 —— 那是插件替鱼下的结论。
+  assert.ok(!r.text.includes('讨厌铺垫'), '印象不该再渲染（REL 里只有 traits，砍了就没关系那行）');
 });
 
 test('persona: 锚点注释标记不会被注入出去', () => {
@@ -154,25 +155,9 @@ test('persona: 关掉 includePersona 就不注入人格', () => {
     now: NOW,
   });
   assert.ok(!r.text.includes('蓝色大肥鱼'));
-  assert.ok(r.text.includes('讨厌铺垫'));
+  assert.ok(!r.text.includes('讨厌铺垫'), '印象不再渲染，这条断言也就没意义了');
 });
 
-test('persona: 只注入还活跃的词汇', () => {
-  const r = renderMemoryBlock({
-    includePersona: false,
-    lexicon: {
-      items: [
-        { term: '白饭', salience: 0.9 },
-        { term: '摸鱼', salience: 0.5 },
-        { term: '早就忘了的词', salience: 0.01 },
-      ],
-    },
-    now: NOW,
-  });
-  assert.ok(r.text.includes('白饭'));
-  assert.ok(r.text.includes('摸鱼'));
-  assert.ok(!r.text.includes('早就忘了的词'));
-});
 
 test('persona: 时间词说人话，且今天的事不加前缀', () => {
   // 用**确定的日历偏移**构造，不要用 `NOW - 0.5 * day` 这种写法 ——
@@ -292,102 +277,11 @@ test('persona: 旧事带上时间词 —— 不能让它把跨会话的事说成
 });
 /* ── 「像日记」而不是「像宪法」：这几条是这个项目最容易退化的地方 ── */
 
-test('persona: 印象必须带画面 —— value —— evidence', () => {
-  const r = renderMemoryBlock({
-    includePersona: false,
-    relationship: {
-      traits: [
-        {
-          key: '铺垫',
-          value: '讨厌铺垫，要结论先行',
-          evidence: '我铺垫了三段，他直接说"说重点"',
-          about: 'user',
-          confidence: 2,
-          salience: 0.9,
-        },
-      ],
-    },
-    now: NOW,
-  });
-  assert.ok(r.text.includes('讨厌铺垫'), r.text);
-  assert.ok(r.text.includes('讨厌铺垫，要结论先行 —— 我铺垫了三段'), '要有画面');
-  assert.ok(!r.text.includes('他：'), '不该再有旧的「他：」清单行');
-});
 
-test('persona: 没有 evidence 的印象不会渲染成空破折号', () => {
-  const r = renderMemoryBlock({
-    includePersona: false,
-    relationship: {
-      traits: [{ key: 'k', value: '讨厌铺垫', evidence: '', about: 'user', confidence: 1, salience: 0.9 }],
-    },
-    now: NOW,
-  });
-  assert.ok(r.text.includes('讨厌铺垫'));
-  assert.ok(!/^- 讨厌铺垫/m.test(r.text), '印象不再用项目符号');
-  assert.ok(!r.text.includes('——'), '没画面就不该出现破折号');
-});
 
-test('persona: 印象最多 2 条 —— 多了就又变回清单', () => {
-  const traits = Array.from({ length: 6 }, (_, i) => ({
-    key: `k${i}`,
-    value: `印象${i}`,
-    evidence: `第${i}次`,
-    about: 'user',
-    confidence: 3,
-    salience: 1 - i * 0.1,
-  }));
-  const r = renderMemoryBlock({ includePersona: false, relationship: { traits }, now: NOW });
-  const hits = (r.text.match(/印象\d/g) ?? []).length;
-  assert.equal(hits, 2, `应只留 2 条，实际 ${hits}`);
-});
 
-test('persona: 带画面的印象排在前面，没画面的往后站（不删旧数据）', () => {
-  const r = renderMemoryBlock({
-    includePersona: false,
-    relationship: {
-      traits: [
-        // salience 更高、更老，但没画面
-        { key: 'a', value: '旧的无画面印象', evidence: '', about: 'user', confidence: 5, salience: 1 },
-        { key: 'b', value: '新的有画面印象', evidence: '那次发生的事', about: 'user', confidence: 1, salience: 0.2 },
-      ],
-    },
-    now: NOW,
-  });
-  const newAt = r.text.indexOf('新的有画面印象');
-  const oldAt = r.text.indexOf('旧的无画面印象');
-  assert.ok(newAt >= 0 && oldAt >= 0, '两条都还在（数据不删）');
-  assert.ok(newAt < oldAt, '带画面的必须排在前面');
-});
 
-test('persona: 只留 2 条时，没画面的会被挤掉', () => {
-  const traits = [
-    { key: 'a', value: '旧的无画面', evidence: '', about: 'user', confidence: 5, salience: 1 },
-    { key: 'b', value: '有画面一', evidence: '第一次', about: 'user', confidence: 1, salience: 0.2 },
-    { key: 'c', value: '有画面二', evidence: '第二次', about: 'user', confidence: 1, salience: 0.1 },
-  ];
-  const r = renderMemoryBlock({ includePersona: false, relationship: { traits }, now: NOW });
-  assert.ok(r.text.includes('有画面一') && r.text.includes('有画面二'));
-  assert.ok(!r.text.includes('旧的无画面'), '没画面的该被挤掉');
-});
 
-test('persona: 自己的规矩和他人的印象分开 —— 不能混在「他：」下面', () => {
-  const r = renderMemoryBlock({
-    includePersona: false,
-    relationship: {
-      traits: [
-        { key: 'a', value: '讨厌铺垫', evidence: '', about: 'user', confidence: 1, salience: 0.9 },
-        { key: 'b', value: '没落盘前不假装记得', evidence: '', about: 'self', confidence: 1, salience: 0.5 },
-      ],
-    },
-    now: NOW,
-  });
-  assert.ok(r.text.includes('讨厌铺垫'), '印象还在');
-  assert.ok(!/我对他的一些印象/.test(r.text), '这一栏的小标题去掉了');
-  // 2026-10-27：那一栏整栏下线 —— 它除了让人事后说一句"又犯了"没有别的用。
-  assert.ok(!r.text.includes('上一棒留下的'), '那一栏删了，注入里不该还有它');
-  assert.ok(!r.text.includes('不假装记得'), 'self 规矩不该出现在注入里');
-  assert.ok(r.text.includes('讨厌铺垫'), 'user 印象必须还在');
-});
 
 /* ── 身份声明：告诉读者这堆字是谁的 ── */
 
@@ -594,48 +488,7 @@ test('apply: 寒暄不再是「无效信息」—— 低 salience 也能留下�
   assert.equal(r.archive.diary.length, 1);
 });
 
-test('apply: 印象只收 user —— self 整类丢掉', () => {
-  const a = createEmptyArchive(NOW, 'x');
-  const r = applyConsolidation(
-    a,
-    {
-      skip: false,
-      relationship: {
-        traits: [
-          { key: '铺垫', value: '讨厌铺垫', evidence: '我说了三段他说说重点', about: 'user', delta: 1 },
-          { key: '诚实', value: '不假装记得', evidence: '他要求过', about: 'self', delta: 1 },
-        ],
-      },
-    },
-    { now: NOW },
-  );
-  const t = r.archive.relationship.traits;
-  // 2026-10-27：about="self" 整类下线，别指望提示词一直守规矩 —— 这里主动丢。
-  assert.equal(t.length, 1, 'self 那条该被丢掉，实际留下 ' + t.length + ' 条');
-  assert.equal(t[0].key, "铺垫");
-  assert.equal(t[0].evidence, "我说了三段他说说重点");
-  assert.equal(t[0].about, "user");
-  assert.equal(t.find((x) => x.key === "诚实"), undefined, "self 不该被存下来");
-});
 
-test('apply: 加固时不会把已有的画面清空', () => {
-  let a = createEmptyArchive(NOW, 'x');
-  a = applyConsolidation(
-    a,
-    { skip: false, relationship: { traits: [{ key: 'k', value: 'v', evidence: '第一次的画面', about: 'user', delta: 1 }] } },
-    { now: NOW },
-  ).archive;
-  // 第二次没带 evidence
-  a = applyConsolidation(
-    a,
-    { skip: false, relationship: { traits: [{ key: 'k', value: 'v2', evidence: '', about: 'user', delta: 1 }] } },
-    { now: NOW + 1 },
-  ).archive;
-  assert.equal(a.relationship.traits.length, 1);
-  assert.equal(a.relationship.traits[0].evidence, '第一次的画面', '画面不该被空字符串覆盖');
-  assert.equal(a.relationship.traits[0].value, 'v2');
-  assert.equal(a.relationship.traits[0].confidence, 2);
-});
 
 test('提示词：判据是「哪一下让你停住了」，而且不许补意义', () => {
   // 2026-10-27 判据整个换掉。原来问的是「能多知道点什么」——问信息，
@@ -644,8 +497,9 @@ test('提示词：判据是「哪一下让你停住了」，而且不许补意�
   assert.ok(CONSOLIDATION_SYSTEM.includes('别替它补'), '不许补意义');
   assert.ok(CONSOLIDATION_SYSTEM.includes('没停过就 skip'), '没停过要能跳过');
 
-  assert.ok(CONSOLIDATION_SYSTEM.includes('evidence'), '要有 evidence 字段');
-  assert.ok(CONSOLIDATION_SYSTEM.includes('说明书'), '要有"不要写成说明书"的反例');
+  // 2026-10-27：traits 砍了，evidence/说明书这两条也就没了
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('traits'), 'traits 不再产出');
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('lexicon'), 'lexicon 不再产出');
 
   // 被删掉的那些「多加」不许回来
   assert.ok(!CONSOLIDATION_SYSTEM.includes('寒暄'), '鼓励寒暄那句删了');
@@ -758,32 +612,7 @@ test('apply: 单次会话条数有硬上限', () => {
   assert.equal(a.diary.length, 3);
 });
 
-test('apply: 同一偏好被重复观察会加固 confidence', () => {
-  let a = createEmptyArchive(NOW, 'x');
-  const mk = (delta, value) => ({
-    skip: false,
-    relationship: { traits: [{ key: '答复', value, delta }] },
-  });
-  a = applyConsolidation(a, mk(1, '要结论先行'), { now: NOW }).archive;
-  a = applyConsolidation(a, mk(2, '要结论先行，别铺垫'), { now: NOW + 1 }).archive;
 
-  assert.equal(a.relationship.traits.length, 1, '同一个 key 不该产生两条');
-  assert.equal(a.relationship.traits[0].confidence, 3);
-  assert.equal(a.relationship.traits[0].value, '要结论先行，别铺垫');
-});
-
-test('apply: trait confidence 有上限，不会无限强化', () => {
-  let a = createEmptyArchive(NOW, 'x');
-  for (let i = 0; i < 50; i++) {
-    a = applyConsolidation(
-      a,
-      { skip: false, relationship: { traits: [{ key: 'k', value: 'v', delta: 3 }] } },
-      { now: NOW + i },
-      { maxTraitConfidence: 20 },
-    ).archive;
-  }
-  assert.equal(a.relationship.traits[0].confidence, 20);
-});
 
 test('apply: 熟悉度被钳在 0~1', () => {
   let a = createEmptyArchive(NOW, 'x');
@@ -811,8 +640,8 @@ test('apply: 坏字段不会污染档案', () => {
   };
   const r = applyConsolidation(a, junk, { now: NOW });
   assert.equal(r.archive.diary.length, 0, '空文本应被丢弃');
-  assert.equal(r.archive.relationship.traits.length, 1);
-  assert.equal(r.archive.relationship.traits[0].key, 'ok');
+  // 2026-10-27：traits 停止产出 —— 连合法的都不再写，脏数据自然也进不来。
+  assert.equal(r.archive.relationship.traits.length, 0, 'traits 不再写入');
 });
 
 test('apply: 不修改入参（纯函数）', () => {
@@ -851,26 +680,7 @@ test('apply: 技术名词不会被塞进词汇表', () => {
   assert.equal(r.archive.lexicon.items.length, 0, '没点名就不该进词汇表');
 });
 
-test('apply: 模型明确点名的梗才进词汇表，且会加固', () => {
-  let a = createEmptyArchive(NOW, 'x');
-  a = applyConsolidation(a, { skip: false, lexicon: ['白饭', '摸鱼'] }, { now: NOW }).archive;
-  assert.deepEqual(a.lexicon.items.map((i) => i.term).sort(), ['摸鱼', '白饭']);
 
-  a = applyConsolidation(a, { skip: false, lexicon: ['白饭'] }, { now: NOW + 1 }).archive;
-  const rice = a.lexicon.items.find((i) => i.term === '白饭');
-  assert.equal(rice.count, 2);
-  assert.ok(rice.salience > 0.35);
-});
-
-test('apply: 词汇表能挡住脏数据与超长词', () => {
-  const a = createEmptyArchive(NOW, 'x');
-  const r = applyConsolidation(
-    a,
-    { skip: false, lexicon: [null, 123, '', '   ', 'x'.repeat(50), '白饭'] },
-    { now: NOW },
-  );
-  assert.deepEqual(r.archive.lexicon.items.map((i) => i.term), ['白饭']);
-});
 
 /* ───────────────────────── 衰减 ───────────────────────── */
 
@@ -918,19 +728,6 @@ test('lexicon: 重复提到会加固并封顶', () => {
 
 /* ───────────────────────── 输入组装 ───────────────────────── */
 
-test('build: 组装出的请求里包含已知偏好与"不要重复"的提示', () => {
-  const a = createEmptyArchive(NOW, 'x');
-  a.relationship.traits.push({ key: '答复', value: '要结论先行', confidence: 2, salience: 0.8, last_reinforced: NOW });
-  const built = buildConsolidationInput({
-    transcript: '他：不对，我说的是 Python',
-    relationship: a.relationship,
-    recentDiary: '- 上次没问清语言',
-  });
-  assert.ok(built.system.includes('只输出 JSON'));
-  assert.ok(built.user.includes('要结论先行'));
-  assert.ok(built.user.includes('不要写重复的'));
-  assert.ok(built.user.includes('不对，我说的是 Python'));
-});
 
 test('budget: 估算与实际渲染自洽', () => {
   const r = renderMemoryBlock({

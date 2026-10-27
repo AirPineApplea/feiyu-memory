@@ -327,7 +327,9 @@ test('host: 用户纠错 → 开闸 → 固化 → 写进档案 → 下次注入
     assert.equal(snap.diary[0].kind, 'failure');
     assert.equal(snap.diary[0].session, 's1');
     assert.equal(snap.relationship.nickname, '肥鱼');
-    assert.equal(snap.relationship.traits[0].value, '动手前先问清前提');
+    // 2026-10-27：traits 停止产出 —— 「他是什么样的人」交给读日记的模型自己判断，
+    // 插件不再先嚼一遍。所以这里断言它**没有**被写进去。
+    assert.equal(snap.relationship.traits.length, 0, 'traits 不再写入');
 
     // 注入文本里应该能看到关系状态（"我还欠着他的"）
     const injected = agent.sections[0].text();

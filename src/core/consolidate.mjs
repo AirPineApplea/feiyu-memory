@@ -67,16 +67,12 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
   },
   "relationship": {
     "nickname": string | null,
-    "familiarityDelta": number,
-    "traits": [ { "key": string, "value": string, "evidence": string, "about": "user" | "self", "delta": number } ]
+    "familiarityDelta": number
   },
-  "lexicon": string[],
   "forget": string[]
 }
 
 familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，其余给 null。
-evidence 是必填的：一句话说清"哪次让我有了这个印象"。写不出来的就别写这条 trait。
-
 【日记】
 
 **今天有哪一下让你停住了？写那一下。**
@@ -94,33 +90,6 @@ evidence 是必填的：一句话说清"哪次让我有了这个印象"。写不
 
 salience 是"以后值不值得想起来"，0~1。
 
-【印象】
-
-traits 只记一种：**他是什么样的人**（about 一律填 "user"）。
-
-判据一句话：**这句话能不能填进「他是个 ___ 的人」？填不进去的就别写。**
-
-哪怕是他提的要求也一样：「他让我先问细节」不是印象（那是我的做法），
-「他喜欢一层层追问到底」才是（那是他的脾气）。
-
-⚠️ 2026-10-27 改：原来还有一类 about="self"（"我该怎么做"），**整类下线了**。
-那种东西是纪律不是印象 —— 它在「写下」那一刻起作用，不在「读到」的时候。
-写下来只会变成一张褪色的旧告示，除了让我事后说一句「又犯了」没有别的用。
-**别再产出 self，产了会被丢掉。**
-
-【词汇】
-
-lexicon 只填真正的口头禅、梗、称呼 —— 他给你起的外号、你们反复接的那一句梗、
-一听就知道是谁的词。
-
-不是口头禅的：
-- 技术名词、普通词汇
-- 记忆块自己的小标题（"我自己想的""最近的事"是结构名，不是我嘴上这么说）
-- 讨论某个议题时的比喻（那是那一阵聊的那件事的名字）
-
-判据：这个词是不是*我跟他在日常里反复说、一听就知道是我们的词*？
-绝大多数时候它是空数组。
-
 【安全】
 
 不记可识别细节 —— 真名、地址、电话、金额都不要。
@@ -128,7 +97,7 @@ lexicon 只填真正的口头禅、梗、称呼 —— 他给你起的外号、�
 
 正例 ——
 输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
-输出：{"skip":false,"diary":{"text":"他说「不对，我说的是 Python」的时候我手停了。我写 Java 之前根本没问过。\n\n那半秒里我还在想怎么把这段圆过去。","tags":["代码"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01,"traits":[{"key":"动手前","value":"动手前先问清前提","evidence":"我没问语言就写了 Java，他纠正我","about":"user","delta":1}]},"lexicon":[],"forget":[]}
+输出：{"skip":false,"diary":{"text":"他说「不对，我说的是 Python」的时候我手停了。我写 Java 之前根本没问过。\n\n那半秒里我还在想怎么把这段圆过去。","tags":["代码"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01},"forget":[]}
 
 （注意这个正例写的是「手停了」「那半秒里我还在想怎么圆过去」——
 不是我悟出了什么道理。**那一下本身就够了，别再补"所以我以后要……"。**）
@@ -136,10 +105,6 @@ lexicon 只填真正的口头禅、梗、称呼 —— 他给你起的外号、�
 反例一（复述隐私，绝对不要）——
 {"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","tags":["隐私"],"kind":"disclosure","salience":0.9,"resolved":null}}
 问题：复述可识别细节。应该写成"他最近为家里的事烦，情绪不太好"。
-
-反例二（说明书体，绝对不要）——
-{"skip":false,"relationship":{"traits":[{"key":"沟通","value":"偏好简洁高效的交流方式","evidence":"","about":"user","delta":1}]}}
-问题：这是给人建档案，不是记印象。没有画面、没有具体哪一次。
 
 反例三（结论体，绝对不要）——
 {"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码"],"kind":"failure","salience":0.75,"resolved":false}}
@@ -222,15 +187,9 @@ export const DEFAULT_CONSOLIDATION = Object.freeze({
 export function buildConsolidationInput(input = {}) {
   const chunks = [];
 
-  const rel = input.relationship;
-  if (rel && (rel.traits ?? []).length > 0) {
-    const traits = (rel.traits ?? [])
-      .slice(0, 8)
-      .map((t) => `${t.key}=${t.value}(×${t.confidence})`)
-      .join('；');
-    if (traits) chunks.push(`【已经知道的】\n偏好：${traits}`);
-  }
-
+  // 2026-10-27：不再把「已经知道的偏好」喂回给固化 ——
+  // 那份「偏好」是 traits，而 traits 已经不再产出。喂回去只会让模型
+  // 继续沿用旧结论，等于把砍掉的东西从后门放回来。
   // 这条可能还没写完 —— 上一轮刚记过同一件事
   if (input.extend && typeof input.extend.text === 'string' && input.extend.text.trim() !== '') {
     chunks.push(
@@ -582,39 +541,15 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
   // 它在「写下」那一刻起作用，读到的时候只是一张褪色的旧告示。
   //
   // 所以这里**主动丢掉模型送来的一切 self**，别指望提示词一直守规矩。
-  if (rel && Array.isArray(rel.traits)) {
-    for (const t of rel.traits.slice(0, 8)) {
-      if (!t || typeof t.key !== 'string' || typeof t.value !== 'string') continue;
-      if (t.about === 'self') continue;
-      const key = t.key.trim().slice(0, 32);
-      const value = t.value.trim().slice(0, 120);
-      if (key === '' || value === '') continue;
-
-      const evidence = typeof t.evidence === 'string' ? t.evidence.trim().slice(0, 160) : '';
-      const about = 'user';
-      const delta = clamp(t.delta, 0, 3, 1);
-
-      const existing = next.relationship.traits.find((x) => x.key === key && x.about === about);
-      if (existing === undefined) {
-        next.relationship.traits.push({
-          key,
-          value,
-          evidence,
-          about,
-          confidence: delta,
-          salience: 0.5,
-          last_reinforced: now,
-        });
-      } else {
-        existing.confidence = Math.min(opts.maxTraitConfidence, existing.confidence + delta);
-        existing.value = value; // 用最新的说法，因为模型看得到已有值
-        // 画面只在这次给了新的时才覆盖 —— 别把已有的具体例子换成空字符串
-        if (evidence !== '') existing.evidence = evidence;
-        existing.salience = Math.min(1, (existing.salience ?? 0.5) + 0.1);
-        existing.last_reinforced = now;
-      }
-    }
-  }
+  // ── traits（「他是什么样的人」）**2026-10-27 停止产出** ──
+  //
+  // 他说得对：**日记不存在意义，它本身就是记录。意义由上下文和 agent 来搞。**
+  //
+  // 「他是什么样的人」是插件替鱼下的结论 —— 从几段对话里提炼一个人格画像。
+  // 那是判断，不是记录。鱼自己读日记就能知道，不需要插件先嚼一遍喂给它。
+  //
+  // 档案里已有的 traits **一个字没删**，只是不再新增、不再渲染。
+  // 想看就翻面板或者直接读 relationship.json。
 
   // ⚠️ **「还欠着他的」这个功能已于 2026-10-24 整体删除，别加回来。**
   //
@@ -627,22 +562,15 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
   //
   // 如果哪天真要「承诺跨会话」，得先解决出口、口径、去重三件事 —— 不能换个名字再塞一遍。
 
-  // —— 词汇与梗：只认模型**明确点名**的 ——
+  // —— 词汇与梗：**2026-10-27 停止产出** ——
   //
-  // 早期版本是拿对话里的高频关键词往词汇表里塞，端到端一跑就露馅了：
-  // 它把 java / python / 文件 当成"我最近常说的"，每轮白白注入一句废话。
-  // 梗是语义判断，不是词频统计 —— 交给模型，别用 extractKeywords 猜。
-  if (Array.isArray(parsed?.lexicon) && parsed.lexicon.length > 0) {
-    const terms = parsed.lexicon
-      .filter((x) => typeof x === 'string')
-      .map((x) => x.trim())
-      .filter((x) => x !== '' && x.length <= 24)
-      .slice(0, 6);
-    if (terms.length > 0) {
-      next.lexicon = reinforceLexicon({ lexicon: next.lexicon }, terms, now).lexicon;
-      notes.push(`词汇表加固 ${terms.length} 个`);
-    }
-  }
+  // 把几句常说的话提炼成"我的口头禅"摆进注入，那是替鱼下结论（意义），
+  // 不是记录。跟 traits 是同一刀。
+  //
+  // 早期版本还有个更糙的：拿对话里的高频关键词往词汇表里塞，端到端一跑就露馅 ——
+  // 它把 java / python / 文件 当成"我最近常说的"。
+  //
+  // 已有的词表**一个字没删**，不再新增、不再渲染。
 
   // —— 遗忘 ——
   if (Array.isArray(parsed?.forget) && parsed.forget.length > 0) {
