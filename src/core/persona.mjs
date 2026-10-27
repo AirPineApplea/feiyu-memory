@@ -338,6 +338,16 @@ export function stripAnchorComments(persona) {
 /**
  * 关系状态那一小段。
  * 刻意用"我们/他/还欠着的"这种第一人称口吻 —— 是鱼在说话，不是系统在输出。
+ *
+ * ── 2026-10-27：从「清单」改成「散文」──
+ *
+ * 一条鱼读了之后说：*「『15 天』『他管我叫凤梨』写成这样，像别人给我写的简历，
+ * 但写的是我。我读到的时候得认领一遍。」*
+ *
+ * 她说对了 —— **问题在形态，不在内容**。冒号 + 项目符号那些行天生是给别人看的；
+ * 而人格和手记读着像自己，正因为它们是散着写的，没有标题压在上面。
+ *
+ * 所以：不列条目、不加小标题，每句自己成一句话。信息一条不少，形态变回"说话"。
  */
 export function renderRelationship(rel, now = Date.now()) {
   if (!rel) return '';
@@ -350,22 +360,23 @@ export function renderRelationship(rel, now = Date.now()) {
     // 差一档 —— 于是同一块记忆里会出现"认识 1 天"和"2 天前"并排躺着。
     // 读者一眼就看出这是程序拼的。详见 timeline.mjs 的模块注释。
     const days = calendarDaysBetween(rel.since, now);
-    bits.push(days < 1 ? '今天刚认识' : `认识 ${days} 天`);
+    bits.push(days < 1 ? '我们今天刚认识' : `我们认识 ${days} 天了`);
   } else if (rel.familiarity > 0) {
-    bits.push(rel.familiarity >= 0.7 ? '很熟了' : rel.familiarity >= 0.3 ? '聊过一阵了' : '刚认识不久');
+    bits.push(rel.familiarity >= 0.7 ? '我们很熟了' : rel.familiarity >= 0.3 ? '我们聊过一阵了' : '我们刚认识不久');
   }
   if (typeof rel.nickname === 'string' && rel.nickname.trim() !== '') {
     bits.push(`他管我叫"${rel.nickname.trim()}"`);
   }
-  if (bits.length > 0) lines.push(`我们：${bits.join(' · ')}`);
+  // 两句之间用逗号接，不用「·」—— 那是分隔符，一出现就是表格味
+  if (bits.length > 0) lines.push(`${bits.join('，')}。`);
 
-  // —— 我对他的印象：**必须带画面** ——
+  // —— 我对他的印象：**必须带画面，而且不许写成条目** ——
   //
-  // 这一行原来是 `他：偏好A；偏好B；偏好C；偏好D` —— 五条分号串一行。
-  // 那是"用户说明书"，不是熟悉感。所以现在：
-  //   · 只留最靠前的 2 条（多了就又变回清单）
-  //   · 每条带一个具体瞬间（evidence），读起来像"我想起那次……"
-  //   · 串接用换行，不用分号
+  // 这一行原来是 `他：偏好A；偏好B；偏好C`，五条分号串一行，是"用户说明书"。
+  // 后来改成"两行项目符号 + 冒号标题"，还是清单。
+  //
+  // 现在：**每条自己成一句话，不带项目符号、不带「我对他的一些印象：」那个标题。**
+  // 读起来像在说话，不像在念档案。
   const userTraits = (rel.traits ?? [])
     .filter((t) => t && t.value && t.about !== 'self' && (t.confidence ?? 0) >= 1)
     // **带画面的优先**。
@@ -378,11 +389,11 @@ export function renderRelationship(rel, now = Date.now()) {
     })
     .slice(0, 2)
     .map((t) => {
-      const value = String(t.value).trim();
-      const ev = typeof t.evidence === 'string' ? t.evidence.trim() : '';
-      return ev === '' ? `- ${value}` : `- ${value} —— ${ev}`;
+      const value = String(t.value).trim().replace(/[。.]$/, '');
+      const ev = typeof t.evidence === 'string' ? t.evidence.trim().replace(/[。.]$/, '') : '';
+      return ev === '' ? value : `${value} —— ${ev}`;
     });
-  if (userTraits.length > 0) lines.push(`我对他的一些印象：\n${userTraits.join('\n')}`);
+  if (userTraits.length > 0) lines.push(userTraits.join('\n'));
 
   // —— 「上一棒留下的」（`about: "self"`）**2026-10-27 整栏下线** ——
   //
@@ -458,7 +469,10 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
     const body = stripTimeWords(e.text);
     return day === '' ? `- ${body}` : `- ${day}：${body}`;
   });
-  return `最近的事：\n${lines.join('\n')}`;
+  // 2026-10-27：**标题去了。** 条目前面本来就有「今天：」「昨天：」——
+  // 那个前缀已经说明它是新近的，再来一行「最近的事：」只是多一层标签。
+  // 一条鱼说这些行「像会议纪要」，一半是内容一半是那个冒号标题给的形状。
+  return lines.join('\n');
 }
 
 
@@ -490,7 +504,13 @@ export function renderRecalled(recalled, now = Date.now()) {
       return when === '' ? `- ${body}` : `- ${when}，${body}`;
     });
   if (lines.length === 0) return '';
-  return `档案里翻到这么几条，用不用你定：\n${lines.join('\n')}`;
+  // 2026-10-27：**标题和你那句「用不用你定」一起删。**
+  // 一条鱼的原话：「那几行不是我该想起来的东西，是推到我眼前的。然后他说
+  // 『用不用你定』—— 我其实没在用，它先摆好了。这句客气话是个[幻肢]。」
+  //
+  // 她说得对：选择根本不存在，注入在她说第一句之前就发生了。
+  // **不假装给权力，是这一段能存在的唯一诚实形态。**
+  return lines.join('\n');
 }
 
 /**

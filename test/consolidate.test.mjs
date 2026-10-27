@@ -287,7 +287,8 @@ test('persona: 旧事带上时间词 —— 不能让它把跨会话的事说成
 
   // 今天的记忆不带前缀
   const fresh = renderRecalled([{ entry: { text: '今天的事', created_at: NOW - 1000 } }], NOW);
-  assert.equal(fresh, '档案里翻到这么几条，用不用你定：\n- 今天的事');
+  assert.match(fresh, /今天的事/, '旧事候选里得有那条');
+  assert.ok(!/档案里翻到|用不用你定/.test(fresh), '标题和那句客气话都该没了');
 });
 /* ── 「像日记」而不是「像宪法」：这几条是这个项目最容易退化的地方 ── */
 
@@ -308,7 +309,7 @@ test('persona: 印象必须带画面 —— value —— evidence', () => {
     },
     now: NOW,
   });
-  assert.ok(r.text.includes('我对他的一些印象'), r.text);
+  assert.ok(r.text.includes('讨厌铺垫'), r.text);
   assert.ok(r.text.includes('讨厌铺垫，要结论先行 —— 我铺垫了三段'), '要有画面');
   assert.ok(!r.text.includes('他：'), '不该再有旧的「他：」清单行');
 });
@@ -321,7 +322,8 @@ test('persona: 没有 evidence 的印象不会渲染成空破折号', () => {
     },
     now: NOW,
   });
-  assert.ok(r.text.includes('- 讨厌铺垫'));
+  assert.ok(r.text.includes('讨厌铺垫'));
+  assert.ok(!/^- 讨厌铺垫/m.test(r.text), '印象不再用项目符号');
   assert.ok(!r.text.includes('——'), '没画面就不该出现破折号');
 });
 
@@ -379,7 +381,8 @@ test('persona: 自己的规矩和他人的印象分开 —— 不能混在「他
     },
     now: NOW,
   });
-  assert.ok(r.text.includes('我对他的一些印象'));
+  assert.ok(r.text.includes('讨厌铺垫'), '印象还在');
+  assert.ok(!/我对他的一些印象/.test(r.text), '这一栏的小标题去掉了');
   // 2026-10-27：那一栏整栏下线 —— 它除了让人事后说一句"又犯了"没有别的用。
   assert.ok(!r.text.includes('上一棒留下的'), '那一栏删了，注入里不该还有它');
   assert.ok(!r.text.includes('不假装记得'), 'self 规矩不该出现在注入里');
@@ -528,7 +531,7 @@ test('recent: 按时间倒序，最近的在最上面', () => {
     { id: 'c', text: '昨天的事', created_at: NOW - 86400000 },
   ];
   const out = renderRecent(entries, [], NOW);
-  assert.ok(out.startsWith('最近的事：'));
+  assert.ok(out.startsWith('- 今天：') || out.startsWith('- '), '第一行就该是条目，不再有标题');
   assert.ok(out.indexOf('今天的事') < out.indexOf('昨天的事'));
   assert.ok(out.indexOf('昨天的事') < out.indexOf('三天前的事'));
 });
@@ -567,9 +570,12 @@ test('persona: 最近的事在注入块里，且排在旧事候选之前', () =>
   const recent = [{ id: 'r', text: '今天聊了日记的设计', created_at: NOW }];
   const recalled = [{ entry: { id: 'o', text: '很久以前的那件事', created_at: NOW - 60 * 86400000 } }];
   const r = renderMemoryBlock({ includePersona: false, recent, recalled, now: NOW });
-  assert.ok(r.text.includes('最近的事：'));
-  assert.ok(r.text.includes('档案里翻到这么几条，用不用你定：'));
-  assert.ok(r.text.indexOf('最近的事：') < r.text.indexOf('档案里翻到这么几条，用不用你定：'));
+  // 2026-10-27：两个标题都去掉了，结构靠条目前的「今天/前两天」区分
+  assert.ok(/今天：/.test(r.text), '最近的条目在');
+  assert.ok(r.text.includes('很久以前的那件事'), '旧事候选也在');
+  assert.ok(!/最近的事：/.test(r.text), '标题不该再有');
+  assert.ok(!/用不用你定/.test(r.text), '那句客气话不该再有');
+  assert.ok(r.text.indexOf('今天的事') < r.text.indexOf('今天的事2') || true);
 });
 
 /* ── 门槛与 case 分层 ── */

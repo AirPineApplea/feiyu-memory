@@ -580,7 +580,9 @@ test('host: 闲聊时真的会翻出旧事', async () => {
       h.emit('session/event', { id: 's1' }, userEvent('排序算法还是有问题，语言也没说清'));
 
       const injected = agent.sections[0].text();
-      assert.ok(injected.includes('档案里翻到这么几条，用不用你定'), `应召回旧事，实际：\n${injected}`);
+      // 2026-10-27：那一栏的标题去掉了，只能靠条目原话判 —— 时间前缀可能是
+      // 「上个月」这种，各版本措辞不同，别拿它当锚点。
+      assert.ok(injected.includes('上次写排序'), `应召回旧事，实际：\n${injected}`);
       assert.ok(injected.includes('排序'));
     },
     {

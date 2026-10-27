@@ -75,7 +75,9 @@ test('预算分配: 旧事候选在 2000–4000 都要出得来', () => {
   // 实测：3000 / 3200 / 3500 全是 ✗，只有 4000 才有。
   for (const b of [2000, 2500, 3000, 3500, 4000]) {
     const t = render(b).text ?? '';
-    assert.ok(t.includes("档案里翻到这么几条，用不用你定"), '预算 ' + b + ' 时召回不见了');
+    // 2026-10-27：那一栏的标题去掉了，现在只能靠「哪条进去了」判 ——
+    // 用召回条目的原话当锚点。
+    assert.ok(/很久以前那件事/.test(t), '预算 ' + b + ' 时召回不见了');
   }
 });
 
@@ -149,7 +151,7 @@ test('pinRecent: 关掉它，行为跟以前一模一样（不许偷偷常驻）
     recent: [{ id: 'a', kind: 'chat', text: '一件事。', created_at: Date.now() }],
     recalled: [], handNotes: [], handNoteHint: '', includePersona: true, budget: 3000, now: Date.now(),
   });
-  assert.match(r1.text, /最近的事：/);
+  assert.match(r1.text, /一件事/);
   const r2 = renderMemoryBlock({
     persona: '# 我是谁\n我是鱼。', relationship: {}, lexicon: { items: [] }, notes: [],
     recent: [{ id: 'a', kind: 'chat', text: '一件事。', created_at: Date.now() }],
