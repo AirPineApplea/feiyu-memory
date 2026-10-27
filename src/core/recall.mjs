@@ -78,6 +78,62 @@ export function buildIndex(entries) {
  * @param {{limit?: number, saturation?: number}} [options]
  * @returns {Map<string, number>} id → 相似度 0~1（未命中的条目不会出现在 map 里）
  */
+
+/**
+ * 虚词 / 语气词 / 高频代词的单字表。
+ *
+ * **只用来判断"这句话是不是压根没内容"，不用来做分词。**
+ * 一个字都不在这张表里，这句话就算有实词。
+ *
+ * 「好」「哈」也在里面 —— 它们单看是实词，但夹在「你好」「哈哈」这种两字里
+ * 就是纯寒暄。宁可漏判（多翻一次记忆），也别把「你上次说的那个公园」挡掉：
+ * **这张表只影响"整句全是这些字"的情况**。
+ */
+const FILLER_CHARS = new Set(
+  '的了吗呢啊吧呀哦嗯么嘛唉诶哟哇啦咯喽呗呐嗨好哈呵嘿嘻是了在有我你他她它您这那哪个就都也还又很太不要能会可说对于把被给让跟和与或但而所以如果因然后先再才刚正啥什怎样多少点些一儿'.split(
+    '',
+  ),
+);
+
+/**
+ * 这句话有没有内容？没内容就别去翻记忆。
+ *
+ * ── 为什么要有这道门 ──
+ *
+ * 「嗯」「好」「在吗」「然后呢」这种话，字面上什么实词都没有 ——
+ * 拿它去检索，最好的情况是**空手而归白跑一趟**，最坏的情况是
+ * 命中一堆"他今天说了嗯"之类的噪声，然后被当成"突然想起来"塞进注入。
+ *
+ * 所以：**没内容的话，这一轮不翻记忆。**
+ *
+ * 注意这道门**只管自动召回**（`renderFor` 里那一栏）——
+ * 不管 `feiyu_recall` 工具。工具是它自己发起去查的，那是它要的，不该拦。
+ *
+ * 判据很土但够用：去掉标点空白后，**至少有一个字不在这张虚词表里**。
+ * 不做模型判断 —— 这一层要是花一次模型调用，就为了判断"嗯"要不要查，
+ * 那比它省下来的还贵。
+ *
+ * @param {unknown} query 用户这一轮说的话
+ * @returns {boolean} true = 有内容，可以翻记忆
+ */
+export function queryHasSubstance(query) {
+  // 只认字符串。`String({})` 会变成 "[object Object]"，那里面当然"有实词"——
+  // 这种输入本来就该当成没内容，不是当成有话要说。
+  if (typeof query !== 'string') return false;
+  const s = query.replace(/[\s\p{P}\p{S}]/gu, '');
+  if (s.length < 2) return false;
+  for (const ch of s) if (!FILLER_CHARS.has(ch)) return true;
+  return false;
+}
+
+/**
+ * BM25-lite 检索，分数映射到 0~1（便于设阈值）。
+ *
+ * @param {ReturnType<typeof buildIndex>} index
+ * @param {string} query
+ * @param {{limit?: number, saturation?: number}} [options]
+ * @returns {Map<string, number>} id → 相似度 0~1（未命中的条目不会出现在 map 里）
+ */
 export function searchScores(index, query, options = {}) {
   const limit = options.limit ?? 50;
   const saturation = Number.isFinite(options.saturation) && options.saturation > 0

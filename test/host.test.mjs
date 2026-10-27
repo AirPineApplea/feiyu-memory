@@ -14,6 +14,7 @@ import path from 'node:path';
 
 import { apply } from '../src/host/index.mjs';
 import { archiveToFiles, createEmptyArchive, ensurePersonaStructure, normalizeDiaryEntry } from '../src/core/archive.mjs';
+import { queryHasSubstance } from '../src/core/recall.mjs';
 
 const NOW = Date.now();
 
@@ -1165,6 +1166,26 @@ test('persona: 没人改的时候，落盘也不会把内存那份丢掉', async
 
 const callRecall = (h, args) => h.tools.get('feiyu_recall').execute(args, {
   signal: new AbortController().signal,
+});
+
+/* ─────────────── queryGate：没实词就不翻记忆 ─────────────── */
+
+test('queryGate: 寒暄和单字不算"有内容"', () => {
+  for (const q of ['嗯', '好', '在吗', '然后呢', '你好', '嗯嗯', '哈哈', '？？？', '你说呢', '嗯好', '   ']) {
+    assert.equal(queryHasSubstance(q), false, JSON.stringify(q) + ' 该被判成没内容');
+  }
+});
+
+test('queryGate: 有实词就放行 —— 宁可多翻一次，别把想问的挡掉', () => {
+  for (const q of ['那个公园', '你还记得那个公园吗', '今天怎么样', '赛博朋克那个续集还写不写了', '继续', '好主意']) {
+    assert.equal(queryHasSubstance(q), true, JSON.stringify(q) + ' 该被判成有内容');
+  }
+});
+
+test('queryGate: 空值/非字符串不抛错，一律当成没内容', () => {
+  for (const q of [undefined, null, '', 0, {}, []]) {
+    assert.equal(queryHasSubstance(q), false, JSON.stringify(q));
+  }
 });
 
 test('recall: 工具注册上了，描述里说清了「什么时候用」', async () => {

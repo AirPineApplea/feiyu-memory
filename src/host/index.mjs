@@ -40,7 +40,7 @@ import {
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
 import { SUPPRESS_RE } from '../core/gate.mjs';
-import { buildIndex, selectMemories, searchScores, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
+import { buildIndex, selectMemories, searchScores, queryHasSubstance, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
@@ -750,15 +750,30 @@ export function apply(ctx, rawConfig) {
       // 不该从召回池绕回来（那等于把「规矩」换个栏目塞回去）。
       const recallPool = events.filter((e) => !recentIds.has(e.id));
 
-      const { chosen } = selectMemories(recallPool, index, query, s, s.turn, {
-        highSim: config.highSim,
-        maxShow: config.maxShowPerTurn,
-        wanderChance: config.wanderChance,
-        // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
-        // 门槛降到 0.15 却在这里卡 0.25，等于白降。
-        minSalience: Math.max(0.15, config.minSalience),
-        now: Date.now(),
-      });
+      // ── 问句信息量这道门（queryGate）──
+      //
+      // 「嗯」「好」「在吗」这种话，字面上一个实词都没有 —— 拿它去检索，
+      // 好一点是空手而归白跑一趟，坏一点是命中一堆「他今天说了嗯」的噪声，
+      // 然后被当成"突然想起来"塞进注入。
+      //
+      // **所以：没内容的话，这一轮不翻记忆。**
+      //
+      // 这道门只管自动召回这一栏 —— 不管 `feiyu_recall` 工具。
+      // 工具是它自己发起去查的，那是它要的，不该拦。
+      const substantial = queryHasSubstance(query);
+      if (!substantial) log(`会话 ${sessionId} 第 ${s.turn} 轮：这句话没实词，不翻记忆`);
+
+      const { chosen } = substantial
+        ? selectMemories(recallPool, index, query, s, s.turn, {
+            highSim: config.highSim,
+            maxShow: config.maxShowPerTurn,
+            wanderChance: config.wanderChance,
+            // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
+            // 门槛降到 0.15 却在这里卡 0.25，等于白降。
+            minSalience: Math.max(0.15, config.minSalience),
+            now: Date.now(),
+          })
+        : { chosen: [] };
 
       // 手记是**只读**的，所以每轮都重新读一遍 —— 别的肥鱼或用户刚写进去的
       // 那行，下一轮就在注入里，不用重启。文件很小，而且整块渲染按轮缓存。
