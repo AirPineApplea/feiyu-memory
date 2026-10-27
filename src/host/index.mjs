@@ -40,7 +40,7 @@ import {
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
 import { SUPPRESS_RE } from '../core/gate.mjs';
-import { buildIndex, selectMemories, searchScores, queryHasSubstance, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
+import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeWork, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
@@ -750,23 +750,30 @@ export function apply(ctx, rawConfig) {
       // 不该从召回池绕回来（那等于把「规矩」换个栏目塞回去）。
       const recallPool = events.filter((e) => !recentIds.has(e.id));
 
-      // ── 问句信息量这道门（queryGate）──
+      // ── 两道门：问句有没有内容，以及这一轮像不像在干活 ──
       //
-      // 「嗯」「好」「在吗」这种话，字面上一个实词都没有 —— 拿它去检索，
-      // 好一点是空手而归白跑一趟，坏一点是命中一堆「他今天说了嗯」的噪声，
-      // 然后被当成"突然想起来"塞进注入。
+      // 1）「嗯」「好」「在吗」这种话，字面上一个实词都没有 —— 拿它去检索，
+      //    好一点是空手而归白跑一趟，坏一点是命中一堆「他今天说了嗯」的噪声。
       //
-      // **所以：没内容的话，这一轮不翻记忆。**
+      // 2）干活时不打扰。他正查报错、贴代码、对版本号，这时候插一句
+      //    「前两天你说过……」是实打实的讨厌。**真用得着旧事时它会自己调工具。**
       //
-      // 这道门只管自动召回这一栏 —— 不管 `feiyu_recall` 工具。
-      // 工具是它自己发起去查的，那是它要的，不该拦。
+      // 两道门都只管自动召回这一栏，**不管 `feiyu_recall` 工具**。
+      //
+      // 2026-10-27 加。判据偏保守：宁可判成干活（少一条旧事），
+      // 也别在人家干活时插话。
       const substantial = queryHasSubstance(query);
+      const working = looksLikeWork(query);
+      const chatty = substantial && !working;
       if (!substantial) log(`会话 ${sessionId} 第 ${s.turn} 轮：这句话没实词，不翻记忆`);
+      else if (working) log(`会话 ${sessionId} 第 ${s.turn} 轮：像在干活，不打扰`);
 
-      const { chosen } = substantial
+      const { chosen } = chatty
         ? selectMemories(recallPool, index, query, s, s.turn, {
             highSim: config.highSim,
-            maxShow: config.maxShowPerTurn,
+            // 闲聊时最多给两条候选 —— **给两条，它用哪条自己定，或者一条都不用。**
+            // 只给一条等于系统替它说了「你就该想起这个」。
+            maxShow: Math.min(2, config.maxShowPerTurn),
             wanderChance: config.wanderChance,
             // 旧事的随机池门槛。注意下限降到 0.15 是为了跟"降门槛"一致 ——
             // 门槛降到 0.15 却在这里卡 0.25，等于白降。

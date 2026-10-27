@@ -127,6 +127,45 @@ export function queryHasSubstance(query) {
 }
 
 /**
+ * 「这一轮像不像在干活」的本地信号。
+ *
+ * 每一条都是**具体形状**，不是"技术话题"这种模糊判断 —— 宁可判成干活
+ * （干活时不打扰），也别在人家正查报错的时候突然插一句旧事。
+ */
+const WORK_SIGNALS = [
+  /```/, // 代码块
+  /`[^`\n]{2,}`/, // 行内代码
+  /\b[\w.-]+\.(?:mjs|js|ts|tsx|jsx|json|yml|yaml|md|py|sh|ps1|cmd|exe|toml)\b/i, // 文件名
+  /[A-Za-z]:[\\/]/, // Windows 绝对路径
+  /(?:^|\s)\/(?:home|usr|tmp|var|opt|etc)\//, // POSIX 绝对路径
+  /\b(?:npm|pnpm|npx|node|git|dsh|yarn|bun)\s+\S+/, // 命令行
+  /\b(?:err|error|exception|stack|traceback|segfault|epipe|eacces)\b/i, // 报错
+  /报错|错误|异常|崩溃|编译|打包|装不上|跑不起来|不生效|报了个|栈溢出/,
+  /\bv?\d+\.\d+\.\d+\b/, // 版本号
+  /\b[A-Za-z_$][\w$]*\(\)/, // 函数调用
+];
+
+/**
+ * 这一轮像不像在工作。**给"要不要自动翻记忆"用，不是给内容分类用。**
+ *
+ * 判据是**形状**：有代码块、有路径、有命令、有报错、有版本号、有函数调用 ——
+ * 命中任何一条就算干活。
+ *
+ * 故意偏保守（宁可判成干活）：工作时不打扰只是少一条旧事，
+ * 而在他正查报错时插一句"前两天你说过……"是实打实的讨厌。
+ *
+ * 注意：**这只挡自动那一栏，不挡 `feiyu_recall` 工具** ——
+ * 干活时真需要旧事，它自己会去查。
+ *
+ * @param {unknown} text 用户这一轮说的话
+ * @returns {boolean} true = 像在干活
+ */
+export function looksLikeWork(text) {
+  if (typeof text !== 'string' || text === '') return false;
+  return WORK_SIGNALS.some((re) => re.test(text));
+}
+
+/**
  * BM25-lite 检索，分数映射到 0~1（便于设阈值）。
  *
  * @param {ReturnType<typeof buildIndex>} index

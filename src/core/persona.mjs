@@ -446,14 +446,18 @@ export function renderRecent(entries, shown, now = Date.now(), limit = 12) {
 
 
 /**
- * 想起来的旧事。第一人称，最多两条。
+ * 想起来的旧事。最多两条。
+ *
+ * ── 标题为什么不叫「突然想起来」 ──
+ *
+ * 2026-10-27 改。原来那句是插件替她说的：她读到的是「我想起了这几条」，
+ * 实际发生的是「系统给了她几条」。**那是让「读到」看起来像「记得」。**
+ *
+ * 现在只陈述事实：档案里有这么几条，用不用随她。冷一点，但那半句是诚实的。
  *
  * 每条前面带一个**模糊的时间词** —— 端到端验证时发现，不给时间线索的话
  * 模型会把跨会话的事说成"上一轮"发生在本对话里的，很出戏。
  * 但也不能写日期：鱼不会说"根据 10 月 12 日的记录"。所以用"前阵子"这类词。
- *
- * 注意它和 `renderRecent` **共用 `timeline.mjs` 那把尺子**，只是换了说法。
- * 词汇差异（"昨天" vs "前两天"）是有意的语气区别，算法差异才是 bug。
  *
  * @param {Array<{entry: object}>} recalled
  * @param {number} [now]
@@ -469,7 +473,7 @@ export function renderRecalled(recalled, now = Date.now()) {
       return when === '' ? `- ${body}` : `- ${when}，${body}`;
     });
   if (lines.length === 0) return '';
-  return `突然想起来：\n${lines.join('\n')}`;
+  return `档案里翻到这么几条，用不用你定：\n${lines.join('\n')}`;
 }
 
 /**

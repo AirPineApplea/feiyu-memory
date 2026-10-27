@@ -257,7 +257,7 @@ test('render: 「最近的事」不会出现「昨天：他今天……」这种
   assert.ok(!/昨天：他今天/.test(out), `时间词写了两遍：${out}`);
 });
 
-test('render: 「突然想起来」同样不会双写时间词', () => {
+test('render: 旧事候选同样不会双写时间词', () => {
   const recalled = [
     {
       entry: {
@@ -287,7 +287,7 @@ test('persona: 旧事带上时间词 —— 不能让它把跨会话的事说成
 
   // 今天的记忆不带前缀
   const fresh = renderRecalled([{ entry: { text: '今天的事', created_at: NOW - 1000 } }], NOW);
-  assert.equal(fresh, '突然想起来：\n- 今天的事');
+  assert.equal(fresh, '档案里翻到这么几条，用不用你定：\n- 今天的事');
 });
 /* ── 「像日记」而不是「像宪法」：这几条是这个项目最容易退化的地方 ── */
 
@@ -543,14 +543,14 @@ test('recent: 日期标签说人话', () => {
   assert.equal(dayLabel(undefined, NOW), '');
 });
 
-test('recent: 已经在「突然想起来」里的条目不再重复出现', () => {
+test('recent: 已经在旧事候选里的条目不再重复出现', () => {
   const entries = [
     { id: 'x', text: '同一条事', created_at: NOW },
     { id: 'y', text: '另一条事', created_at: NOW - 1000 },
   ];
   const out = renderRecent(entries, [{ entry: { id: 'x' } }], NOW);
   assert.ok(out.includes('另一条事'));
-  assert.ok(!out.includes('同一条事'), '同一条不该既在"最近"又在"突然想起来"里');
+  assert.ok(!out.includes('同一条事'), '同一条不该既在"最近"又在旧事候选里');
 });
 
 test('recent: 有条数上限，且空文本被跳过', () => {
@@ -565,13 +565,13 @@ test('recent: 有条数上限，且空文本被跳过', () => {
   assert.equal(renderRecent(null, [], NOW), '');
 });
 
-test('persona: 最近的事在注入块里，且排在突然想起来之前', () => {
+test('persona: 最近的事在注入块里，且排在旧事候选之前', () => {
   const recent = [{ id: 'r', text: '今天聊了日记的设计', created_at: NOW }];
   const recalled = [{ entry: { id: 'o', text: '很久以前的那件事', created_at: NOW - 60 * 86400000 } }];
   const r = renderMemoryBlock({ includePersona: false, recent, recalled, now: NOW });
   assert.ok(r.text.includes('最近的事：'));
-  assert.ok(r.text.includes('突然想起来：'));
-  assert.ok(r.text.indexOf('最近的事：') < r.text.indexOf('突然想起来：'));
+  assert.ok(r.text.includes('档案里翻到这么几条，用不用你定：'));
+  assert.ok(r.text.indexOf('最近的事：') < r.text.indexOf('档案里翻到这么几条，用不用你定：'));
 });
 
 /* ── 门槛与 case 分层 ── */

@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import { apply } from '../src/host/index.mjs';
 import { archiveToFiles, createEmptyArchive, ensurePersonaStructure, normalizeDiaryEntry } from '../src/core/archive.mjs';
-import { queryHasSubstance } from '../src/core/recall.mjs';
+import { queryHasSubstance, looksLikeWork } from '../src/core/recall.mjs';
 
 const NOW = Date.now();
 
@@ -567,7 +567,7 @@ test('host: 同一轮内多次 assemble 拿到完全相同的文本（不换着�
   );
 });
 
-test('host: 强相关时真的会"突然想起来"', async () => {
+test('host: 闲聊时真的会翻出旧事', async () => {
   await withHome(
     async (home) => {
       const h = makeHarness();
@@ -580,7 +580,7 @@ test('host: 强相关时真的会"突然想起来"', async () => {
       h.emit('session/event', { id: 's1' }, userEvent('排序算法还是有问题，语言也没说清'));
 
       const injected = agent.sections[0].text();
-      assert.ok(injected.includes('突然想起来'), `应召回旧事，实际：\n${injected}`);
+      assert.ok(injected.includes('档案里翻到这么几条，用不用你定'), `应召回旧事，实际：\n${injected}`);
       assert.ok(injected.includes('排序'));
     },
     {
@@ -1186,6 +1186,30 @@ test('queryGate: 空值/非字符串不抛错，一律当成没内容', () => {
   for (const q of [undefined, null, '', 0, {}, []]) {
     assert.equal(queryHasSubstance(q), false, JSON.stringify(q));
   }
+});
+
+test('mode: 闲聊不判成干活 —— 不然它永远不翻旧事', () => {
+  for (const q of ['今天好累', '那个公园的树真好看', '你还记得那个公园吗', '我今天中午吃的面', '你觉得这个想法怎么样', '我昨天看了一部电影']) {
+    assert.equal(looksLikeWork(q), false, JSON.stringify(q) + ' 被误判成干活');
+  }
+});
+
+test('mode: 干活认得出 —— 代码、路径、命令、报错、版本号、函数调用', () => {
+  const work = [
+    '帮我改一下 src/host/index.mjs',
+    '报错说 Cannot read properties of undefined',
+    'npm run build 失败',
+    'dsh plugin add feiyu-memory',
+    '0.3.6 发了没',
+    '那个函数 selectMemories() 有问题',
+    '跑不起来',
+    '装不上，编译错误',
+  ];
+  for (const q of work) assert.equal(looksLikeWork(q), true, JSON.stringify(q) + ' 没判成干活');
+});
+
+test('mode: 空值和非字符串不抛错，当成闲聊', () => {
+  for (const q of [undefined, null, '', 0, {}, []]) assert.equal(looksLikeWork(q), false, JSON.stringify(q));
 });
 
 test('recall: 工具注册上了，描述里说清了「什么时候用」', async () => {
