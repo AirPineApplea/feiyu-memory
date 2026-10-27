@@ -637,12 +637,20 @@ test('apply: 加固时不会把已有的画面清空', () => {
   assert.equal(a.relationship.traits[0].confidence, 2);
 });
 
-test('提示词：明确写了「寒暄值得记」并且要求 evidence', () => {
-  assert.ok(CONSOLIDATION_SYSTEM.includes('寒暄'), '要明说寒暄值得记');
+test('提示词：判据是「哪一下让你停住了」，而且不许补意义', () => {
+  // 2026-10-27 判据整个换掉。原来问的是「能多知道点什么」——问信息，
+  // 留下的自然全是结论；再鼓励一句「寒暄也值得记」，那是往判据上加意义。
+  assert.ok(CONSOLIDATION_SYSTEM.includes('哪一下让你停住了'), '判据本体');
+  assert.ok(CONSOLIDATION_SYSTEM.includes('别替它补'), '不许补意义');
+  assert.ok(CONSOLIDATION_SYSTEM.includes('没停过就 skip'), '没停过要能跳过');
+
   assert.ok(CONSOLIDATION_SYSTEM.includes('evidence'), '要有 evidence 字段');
-  assert.ok(CONSOLIDATION_SYSTEM.includes('about="self"'), '要区分自己的规矩');
   assert.ok(CONSOLIDATION_SYSTEM.includes('说明书'), '要有"不要写成说明书"的反例');
-  assert.ok(!/寒暄、试错、无信息的往返 → 低于 0\.3/.test(CONSOLIDATION_SYSTEM), '旧的那句必须删掉');
+
+  // 被删掉的那些「多加」不许回来
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('寒暄'), '鼓励寒暄那句删了');
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('【不写工作报告】'), '整节删了 —— 强判据让它多余');
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('下一个我读到这条'), '旧的问法删了');
 });
 
 /* ───────────────────────── 解析 ───────────────────────── */
@@ -695,7 +703,7 @@ test('parse: 救不回来就明确报错，不猜内容', () => {
 test('parse: 系统提示词里必须有反例和 skip 出口', () => {
   assert.ok(CONSOLIDATION_SYSTEM.includes('"skip"'));
   assert.ok(CONSOLIDATION_SYSTEM.includes('反例'));
-  assert.ok(CONSOLIDATION_SYSTEM.includes('第一人称'));
+  assert.ok(CONSOLIDATION_SYSTEM.includes('用「我」写'), '要说明用第一人称写');
 });
 
 /* ───────────────────────── 合并 ───────────────────────── */
