@@ -489,23 +489,35 @@ export function apply(ctx, rawConfig) {
         warn(`补总结：写状态失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
       }
 
-      // 等 llm 和模型信息就绪 —— 启动瞬间它们常常还没挂上
-      const deadline = Date.now() + 120000;
-      let waited = 0;
-      for (;;) {
-        const llmNow = ctx.get('llm');
-        const sel = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
-        const mdl = config.model || sel?.model;
-        if (llmNow !== undefined && typeof sel?.provider === 'string' && typeof mdl === 'string') break;
-        if (Date.now() > deadline) {
-          warn('补总结：等了 2 分钟还没等到 llm 或模型信息，这次不补了');
-          markBackfill(pending().length, 0, 'timeout');
-          try { await persist(); } catch { /* 写不进去就算了 */ }
-          return;
+      // 等 llm 和模型信息就绪
+      //
+      // 2026-10-28 实测：这一行里任何一个 ctx.get() 都可能**直接抛**，
+      // 抛出去以后状态就永远停在 "starting" —— 看起来像"卡住了"，其实是"炸了"。
+      // 所以整段包起来，炸了也要把 error 写进 manifest。
+      try {
+        const deadline = Date.now() + 120000;
+        let waited = 0;
+        for (;;) {
+          const llmNow = ctx.get('llm');
+          const sel = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+          const mdl = config.model || sel?.model;
+          if (llmNow !== undefined && typeof sel?.provider === 'string' && typeof mdl === 'string') break;
+          if (Date.now() > deadline) {
+            warn('补总结：等了 2 分钟还没等到 llm 或模型信息，这次不补了');
+            markBackfill(pending().length, 0, 'timeout');
+            try { await persist(); } catch { /* 写不进去就算了 */ }
+            return;
+          }
+          waited += 1;
+          if (waited % 15 === 0) log(`补总结：还在等 llm（已等 ${waited * 2}s）`);
+          await sleep(2000);
         }
-        waited += 1;
-        if (waited % 15 === 0) log(`补总结：还在等 llm（已等 ${(waited * 2)}s）`);
-        await sleep(2000);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warn(`补总结：等服务就绪时炸了：${msg}`);
+        markBackfill(pending().length, 0, 'error');
+        try { await persist(); } catch { /* 写不进去就算了 */ }
+        return;
       }
 
       const total = pending().length;
@@ -641,10 +653,12 @@ export function apply(ctx, rawConfig) {
         warn(`启动留痕写盘失败：${err instanceof Error ? err.message : String(err)}`);
       }
 
-      // 后台补 summary —— 不 await，绝不能卡启动
-      void backfillSummaries().catch((err) =>
-        warn(`补总结出错（不影响别的）：${err instanceof Error ? err.message : String(err)}`),
-      );
+      // ── 补总结**不在启动时**跑 ──
+      //
+      // 实测两次：插件 apply 的时候 `ctx.get('llm')` 是 undefined，
+      // 等两分钟也等不到（manifest 停在 state:"starting"）。
+      // 所以触发点挪到 `agent/turn-stopping` —— 那条路上 llm 一定是活的。
+      // 见那边开头的注释。
 
       // 手记文件不在就建一份带说明的空壳 —— **文件自己就是文档**。
       // 用户（或任何一个肥鱼）打开就知道该往里写什么。
@@ -1318,6 +1332,17 @@ export function apply(ctx, rawConfig) {
       if (!config.enabled || !ready || degraded) return;
       const id = agent?.id;
       if (typeof id !== 'string') return;
+
+      // ── 补总结：从**这里**启动，不从启动时启动 ──
+      //
+      // 2026-10-28 试过在 loadPromise 里启动，失败两次：
+      // 插件 apply 的时候 `ctx.get('llm')` 是 undefined，
+      // 就算等两分钟也等不到 —— 实测 manifest 里停在 state:"starting"。
+      //
+      // 而这里（turn-stopping）llm 一定是活的：固化本来就跑在这条路上。
+      // 所以：**等第一次有人说话，才去补。** 不 await，有闸，重复调没事。
+      void backfillSummaries();
+
       const s = stateOf(id);
       if (s.turn === 0 || s.lastUserText === '') return;
       if (s.suppressedUntil === s.turn) {
