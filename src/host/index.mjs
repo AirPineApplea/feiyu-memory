@@ -609,6 +609,31 @@ export function apply(ctx, rawConfig) {
    * 为什么要落盘：`log()` 默认不写（debugLog 关着），
    * 而"补了多少"是能证明这套东西到底跑没跑的唯一证据。
    */
+  /**
+   * 记一笔「挑往事」这次的用量。
+   *
+   * 为什么非记不可：**缓存命中率是看不见的。** 请求发出去、答案回来了、
+   * 一切正常，只有账单知道这次是 0.1 元/M 还是 1 元/M。
+   * 而 prompt 的字段顺序一旦写反（把会变的那句放前面），缓存就静悄悄地失效了 ——
+   * 今天就是这么栽的，全靠事后读日志才翻出来。
+   *
+   * 所以：每次挑完把 usage 落进 manifest，谁都能一眼看见。
+   */
+  function markPick(entries, lines, usage) {
+    const u = usage ?? {};
+    archive.manifest = {
+      ...archive.manifest,
+      pick_stats: {
+        at: Date.now(),
+        entries,
+        lines,
+        inputTokens: Number.isFinite(u.inputTokens) ? u.inputTokens : null,
+        cacheReadTokens: Number.isFinite(u.cacheReadTokens) ? u.cacheReadTokens : null,
+        outputTokens: Number.isFinite(u.outputTokens) ? u.outputTokens : null,
+      },
+    };
+  }
+
   function markBackfill(total, done, state) {
     archive.manifest = {
       ...archive.manifest,
@@ -2071,6 +2096,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
 
     const t0 = Date.now();
     let text = '';
+    let finishChunk;
     try {
       for await (const chunk of llmP.stream({
         provider,
@@ -2095,10 +2121,22 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           : {}),
       })) {
         if (chunk?.type === 'text-delta') text += chunk.text;
+        // finish 里带着这次的 token 账 —— **缓存到底命没命中，只有这一处看得见。**
+        else if (chunk?.type === 'finish') finishChunk = chunk;
       }
     } catch (err) {
       warn(`挑往事失败，退回字面：${err instanceof Error ? err.message : String(err)}`);
       return null;
+    }
+
+    // 记一笔用量 —— 缓存有没有命中，只有 finish 里的 usage 说得清。
+    // 不写日志（debugLog 默认关着），写 manifest：任何时候都能查。
+    try {
+      const u = finishChunk?.usage ?? finishChunk?.data?.usage;
+      markPick(pool.length, lines.length, u);
+      await persist();
+    } catch (err) {
+      warn(`挑往事：记用量失败（不影响结果）：${err instanceof Error ? err.message : String(err)}`);
     }
 
     const a = text.indexOf('{');
