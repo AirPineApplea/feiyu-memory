@@ -382,3 +382,104 @@ export function softmaxPick(items, temperature, rng) {
   }
   return items[items.length - 1];
 }
+
+/**
+ * 从一句话里认出「他问的是哪段时间」。
+ *
+ * ── 为什么要它 ──
+ *
+ * 人问往事，一半靠内容、一半靠时间：
+ *
+ *      「赛博朋克那事」   内容好找
+ *      「上个月那个」     一个专有名词都没有 —— 拿去做内容检索，一个字都撞不上
+ *
+ * 以前索引里没有时间，日期只活在条目的 created_at 上，检索根本用不着它。
+ * 现在索引行前面带日期，这一层才终于有意义。
+ *
+ * ── 故意做得很土 ──
+ *
+ * 只认几种说法，认不出就返回 null，**绝不猜**。
+ * 猜错的代价比认不出大：认不出只是回到老路（按内容找），
+ * 猜错会把真正要的那条挡在时间窗外 —— 而且无声。
+ *
+ * @param {unknown} query
+ * @param {number} [now]
+ * @returns {{label: string, from: number, to: number} | null}
+ */
+export function parseTimeHint(query, now = Date.now()) {
+  if (typeof query !== 'string' || query === '') return null;
+
+  const DAY = 86400000;
+  const startOfDay = (t) => {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const today = startOfDay(now);
+  const dayRange = (fromDay, toDay) => ({ from: fromDay, to: toDay + DAY - 1 });
+
+  // 「大前天 / 前天 / 昨天 / 今天」—— 单个自然日
+  const single = [
+    ['大前天', 3, '大前天'],
+    ['前天', 2, '前天'],
+    ['昨天', 1, '昨天'],
+    ['昨儿', 1, '昨天'],
+    ['今天', 0, '今天'],
+    ['今儿', 0, '今天'],
+  ];
+  for (const [word, back, label] of single) {
+    if (query.includes(word)) {
+      const d = today - back * DAY;
+      return { label, ...dayRange(d, d) };
+    }
+  }
+
+  // 最近几天
+  for (const word of ['前两天', '前几天', '这几天', '这两天']) {
+    if (query.includes(word)) return { label: '最近三天', ...dayRange(today - 2 * DAY, today) };
+  }
+  if (query.includes('最近')) return { label: '最近一周', ...dayRange(today - 6 * DAY, today) };
+
+  // 自然周（周一为一周之始）
+  const weekday = (new Date(today).getDay() + 6) % 7; // 周一 = 0
+  if (query.includes('上周') || query.includes('上星期')) {
+    const thisMonday = today - weekday * DAY;
+    return { label: '上周', ...dayRange(thisMonday - 7 * DAY, thisMonday - DAY) };
+  }
+  if (query.includes('这周') || query.includes('本星期') || query.includes('本周')) {
+    const thisMonday = today - weekday * DAY;
+    return { label: '这周', ...dayRange(thisMonday, today) };
+  }
+
+  // 自然月
+  const d0 = new Date(today);
+  if (query.includes('上个月') || query.includes('上月')) {
+    const from = new Date(d0.getFullYear(), d0.getMonth() - 1, 1).getTime();
+    const to = new Date(d0.getFullYear(), d0.getMonth(), 1).getTime() - 1;
+    return { label: '上个月', from, to };
+  }
+  if (query.includes('这个月') || query.includes('本月')) {
+    const from = new Date(d0.getFullYear(), d0.getMonth(), 1).getTime();
+    return { label: '这个月', ...dayRange(from, today) };
+  }
+  if (query.includes('去年')) {
+    const from = new Date(d0.getFullYear() - 1, 0, 1).getTime();
+    const to = new Date(d0.getFullYear(), 0, 1).getTime() - 1;
+    return { label: '去年', from, to };
+  }
+
+  // 「X 月」—— 今年的那个月；如果还没到，就当去年
+  const m = query.match(/(\d{1,2})\s*月/);
+  if (m !== null) {
+    const month = Number(m[1]);
+    if (month >= 1 && month <= 12) {
+      let year = d0.getFullYear();
+      if (month > d0.getMonth() + 1) year -= 1;
+      const from = new Date(year, month - 1, 1).getTime();
+      const to = new Date(year, month, 1).getTime() - 1;
+      return { label: `${month} 月`, from, to };
+    }
+  }
+
+  return null;
+}

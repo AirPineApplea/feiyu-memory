@@ -40,7 +40,7 @@ import {
 // 原来的 evaluateGate 那套关键词闸门拆了（见 turn-stopping 里的注释）。
 // SUPPRESS_RE 留着 —— "别记"是用户的控制，不是启发式。
 import { SUPPRESS_RE } from '../core/gate.mjs';
-import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeWork, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
+import { buildIndex, selectMemories, searchScores, queryHasSubstance, looksLikeWork, parseTimeHint, DEFAULT_RECALL_OPTIONS } from '../core/recall.mjs';
 import { overlap } from '../core/keywords.mjs';
 import { scrub } from '../core/privacy.mjs';
 import { renderMemoryBlock, DEFAULT_BUDGET } from '../core/persona.mjs';
@@ -2013,19 +2013,54 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     if (llmP === undefined) return null;
     const all = archive.diary.filter((e) => typeof e.text === 'string' && e.text !== '');
     if (all.length === 0) return [];
-    const pool = all.slice(-400);
-    if (all.length > pool.length) log(`挑往事：${all.length} 条只取最近 ${pool.length} 条`);
+
+    // ── 时间先收窄一次 ──
+    //
+    // 「上个月那个」「前两天我说过」—— 这种问法里一个专有名词都没有，
+    // 拿去做内容检索，一个字都撞不上。而日期本来就在条目上，之前白白没用。
+    //
+    // 认得出时间就只在那个窗口里挑；窗口里一条都没有，就退回全量 ——
+    // **绝不因为时间认错过而让她什么也找不到。**
+    let narrowed = null;
+    const timeHint = parseTimeHint(query, Date.now());
+    if (timeHint !== null) {
+      const inWindow = all.filter(
+        (e) => Number.isFinite(e.created_at) && e.created_at >= timeHint.from && e.created_at <= timeHint.to,
+      );
+      if (inWindow.length > 0) {
+        narrowed = timeHint;
+        log(
+          `挑往事：她问的是「${timeHint.label}」，先把 ${all.length} 条收到 ${inWindow.length} 条`,
+        );
+      } else {
+        log(`挑往事：她问的是「${timeHint.label}」，但那个窗口里一条都没有，退回全量`);
+      }
+    }
+
+    const base = narrowed === null ? all : all.filter(
+      (e) => Number.isFinite(e.created_at) && e.created_at >= narrowed.from && e.created_at <= narrowed.to,
+    );
+    const pool = base.slice(-400);
+    if (base.length > pool.length) log(`挑往事：${base.length} 条只取最近 ${pool.length} 条`);
+
+    // 索引行前面带日期 —— 模型才有办法回答「那阵子」这种问法。
+    const dayLabel = (t) => {
+      if (!Number.isFinite(t)) return '??/??';
+      const d = new Date(t);
+      return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+    };
     const lines = pool.map((e) => {
       const idx =
         typeof e.summary === 'string' && e.summary !== ''
           ? e.summary
           : String(e.text).replace(/\s+/g, ' ').slice(0, 30);
-      return `${e.id} ${idx}`;
+      return `${e.id} ${dayLabel(e.created_at)} ${idx}`;
     });
 
     const system =
       '你在帮一条鱼回忆往事。她问了一句，你从她的日记索引里挑出最相关的几条。\n\n' +
-      '每行是「id 空格 一句索引」。有些索引很粗（正文截断出来的），别嫌弃。\n' +
+      '每行是「id 空格 日期 一句索引」。有些索引很粗（正文截断出来的），别嫌弃。\n' +
+      '**如果她问的是一段时间（「那阵子」「上个月」），优先看日期。**\n' +
       '只输出 JSON：{"ids":["d_20261028_1","d_20261028_2"]}\n' +
       '没有相关的就输出 {"ids":[]}。最多 ' + limit + ' 条。**宁可少挑，别硬凑。**';
 

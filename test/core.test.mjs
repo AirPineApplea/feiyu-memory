@@ -10,7 +10,7 @@ import { scrub, scrubAll, noticeFor, PRESET_REMEMBER_NAMES } from '../src/core/p
 import { tokenize, extractKeywords, overlap } from '../src/core/keywords.mjs';
 import { estimateTokens, truncateToTokens } from '../src/core/tokenize.mjs';
 import { SUPPRESS_RE } from '../src/core/gate.mjs';
-import { buildIndex, searchScores, selectMemories } from '../src/core/recall.mjs';
+import { buildIndex, searchScores, selectMemories, parseTimeHint } from '../src/core/recall.mjs';
 
 /* ───────────────────────── zip ───────────────────────── */
 
@@ -344,4 +344,54 @@ test('索引不再吃 keywords —— 只有 keywords 的条目检索不到', ()
   const idx = buildIndex([{ id: 'd1', keywords: ['赛博朋克', '边缘行者'], text: '' }]);
   const hits = searchScores(idx, '赛博朋克', { limit: 10 });
   assert.equal(hits.has('d1'), false, 'keywords 不再参与建索引');
+});
+
+
+/* ───────────── 时间提示：让「上个月那个」找得到 ───────────── */
+
+const NOW_T = new Date(2026, 9, 28, 22, 0, 0).getTime(); // 2026-10-28 周三
+
+test('time: 单个自然日', () => {
+  const y = parseTimeHint('昨天说的那事', NOW_T);
+  assert.equal(y.label, '昨天');
+  const d = new Date(y.from);
+  assert.equal(d.getDate(), 27);
+  assert.equal(d.getHours(), 0);
+  assert.equal(new Date(y.to).getHours(), 23);
+});
+
+test('time: 上个月是完整的上一个自然月', () => {
+  const h = parseTimeHint('上个月那个', NOW_T);
+  assert.equal(h.label, '上个月');
+  const from = new Date(h.from);
+  const to = new Date(h.to);
+  assert.equal(from.getMonth(), 8, '九月');
+  assert.equal(from.getDate(), 1);
+  assert.equal(to.getMonth(), 8);
+  assert.equal(to.getDate(), 30);
+});
+
+test('time: 前几天 / 最近', () => {
+  assert.equal(parseTimeHint('前两天我说过', NOW_T).label, '最近三天');
+  assert.equal(parseTimeHint('最近有没有提过', NOW_T).label, '最近一周');
+});
+
+test('time: 认不出就说认不出 —— 绝不猜', () => {
+  assert.equal(parseTimeHint('赛博朋克那部', NOW_T), null);
+  assert.equal(parseTimeHint('', NOW_T), null);
+  assert.equal(parseTimeHint(null, NOW_T), null);
+  assert.equal(parseTimeHint({}, NOW_T), null);
+});
+
+test('time: 还没到的月份算去年', () => {
+  // 现在是十月，问「12 月」应该指去年十二月
+  const h = parseTimeHint('12 月那事', NOW_T);
+  assert.equal(new Date(h.from).getFullYear(), 2025);
+  assert.equal(new Date(h.from).getMonth(), 11);
+});
+
+test('time: 窗口是闭区间 —— 边界那天要包住', () => {
+  const h = parseTimeHint('昨天', NOW_T);
+  assert.ok(h.from <= h.to);
+  assert.equal(h.to - h.from, 86399999, '一整天少一毫秒');
 });
