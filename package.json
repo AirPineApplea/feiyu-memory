@@ -1,6 +1,6 @@
 {
   "name": "feiyu-memory",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "给 DeepSeek Harness 一条会记事的蓝色大肥鱼：跨会话的持久记忆 —— 人格内核、我自己想的、情景日记。",
   "type": "module",
   "license": "MIT",
