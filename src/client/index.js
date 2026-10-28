@@ -338,10 +338,8 @@ window.__ModuleLoader__.load({
 
       const d = state || {};
       const facts = d.facts || {};
-      const traits = d.traits || [];
-      // 只显示「他是什么样的人」。`about === 'self'`（"我该怎么做"）那一类
-      // 2026-10-27 整类下线 —— 面板不显示，固化也不再产出。
-      const mine = traits.filter((t) => t.about !== 'self');
+      // traits（印象）2026-10-27 整类下线 —— 面板不显示，固化也不再产出。
+      // 数据还在档案里，要看就翻 relationship.json。
       const diary = d.diary || [];
 
       const head = [];
@@ -388,27 +386,15 @@ window.__ModuleLoader__.load({
               )
             : null,
 
-          // ── 我对他的一些印象 ──
-          mine.length > 0
-            ? h(
-                Section,
-                { title: '我对他的一些印象' },
-                mine.map((t, i) =>
-                  h(
-                    'div',
-                    { key: `t${i}`, style: { marginBottom: 8, fontSize: 13, lineHeight: 1.7 } },
-                    h('span', null, t.value),
-                    t.evidence
-                      ? h('span', { style: { color: C.text2 } }, ` —— ${t.evidence}`)
-                      : null,
-                  ),
-                ),
-              )
-            : null,
+          // ── 「我对他的一些印象」（traits）2026-10-27 整栏下线 ──
+          // 注入层、固化侧都删了 —— 面板这里跟着删，不然界面上还挂着一栏，
+          // 而它永远不会再有新内容（只能显示砍之前的老数据）。
+          // 档案里那些 traits 一个字没删，要看就翻 relationship.json。
 
-          // ── 「上一棒留下的」那一栏 2026-10-27 整栏下线 ──
-          // 注入层（persona.mjs）和固化侧（consolidate.mjs）都删了，
-          // 面板这里跟着删 —— 不然界面上还挂着一栏，插件却不认它了。
+          // ── 「我最近常说的」（lexicon）2026-10-27 整栏下线 ──
+          // 同一刀：词表不再产出，这栏只剩历史。
+
+          // 「上一棒留下的」那一栏 2026-10-27 整栏下线 ──
           // 档案里那些 about="self" 的 trait 一个字没删，只是不再显示。
 
           // 「我还欠着他的」那一栏随功能一起删了（2026-10-24）。
@@ -422,10 +408,7 @@ window.__ModuleLoader__.load({
               : diary.map((e) => h(Entry, { key: e.id, entry: e, onForget: forget, busy: busy === e.id })),
           ),
 
-          // ── 我最近常说的 ──
-          (facts.lexicon || []).length > 0
-            ? h(Section, { title: '我最近常说的' }, h(Empty, { text: facts.lexicon.join('、') }))
-            : null,
+          // 「我最近常说的」2026-10-27 整栏下线（见上面）。
 
           // ── 带走 ──
           h(

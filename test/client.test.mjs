@@ -234,7 +234,7 @@ test('client: 数据没到之前显示"翻档案…"，不白屏', () => {
   assert.match(textOf(tree), /翻档案/);
 });
 
-test('client: 拿到数据后把日记、印象、规矩都渲染出来', async () => {
+test('client: 拿到数据后只渲染日记 —— 印象和词表都下线了', async () => {
   const payload = {
     ok: true,
     ready: true,
@@ -268,15 +268,18 @@ test('client: 拿到数据后把日记、印象、规矩都渲染出来', async 
 
   assert.match(out, /肥鱼日记/, '标题');
   assert.match(out, /认识 3 天/, '关系事实');
-  assert.match(out, /讨厌铺垫/, '印象');
-  assert.match(out, /他直接说/, '印象必须带画面');
+  // 2026-10-27：traits（印象）和 lexicon（词表）整栏下线 ——
+  // 它们只能显示砍之前的老数据，界面上挂着就是骗人。
+  assert.doesNotMatch(out, /讨厌铺垫/, '印象不该再显示');
+  assert.doesNotMatch(out, /我最近常说的/, '词表那一栏删了');
+  assert.doesNotMatch(out, /白饭/, '词不该再显示');
   // 2026-10-27：「上一棒留下的」那一栏整栏下线（注入层、固化侧、面板一起）。
   assert.doesNotMatch(out, /上一棒留下的/, '那一栏已经删了');
   assert.doesNotMatch(out, /不假装记得/, 'self 规矩不该再显示');
   // 「我还欠着他的」那一栏随功能删除（2026-10-24）。
   assert.doesNotMatch(out, /还欠着他的/, '这一栏已经删了');
   assert.match(out, /他翻出一篇小说给我看/, '日记正文');
-  assert.match(out, /白饭/, '口头禅');
+  // 口头禅那栏 2026-10-27 下线了 —— 上面已经断言它不该出现
   assert.match(out, /导出档案/, '带走');
 });
 
