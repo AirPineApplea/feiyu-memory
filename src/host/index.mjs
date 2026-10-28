@@ -619,7 +619,7 @@ export function apply(ctx, rawConfig) {
    *
    * 所以：每次挑完把 usage 落进 manifest，谁都能一眼看见。
    */
-  function markPick(entries, lines, usage) {
+  function markPick(entries, lines, usage, finishChunk) {
     const u = usage ?? {};
     archive.manifest = {
       ...archive.manifest,
@@ -630,6 +630,13 @@ export function apply(ctx, rawConfig) {
         inputTokens: Number.isFinite(u.inputTokens) ? u.inputTokens : null,
         cacheReadTokens: Number.isFinite(u.cacheReadTokens) ? u.cacheReadTokens : null,
         outputTokens: Number.isFinite(u.outputTokens) ? u.outputTokens : null,
+        // 取不到 usage 的时候，把 finish 的形状留下来 —— 别再猜字段名。
+        // 只留前 300 字，够看清结构，不至于把整段响应塞进档案。
+        finishKeys:
+          u === undefined || usage === undefined
+            ? Object.keys(finishChunk ?? {}).join(',') + ' :: ' +
+              JSON.stringify(finishChunk ?? {}).slice(0, 300)
+            : undefined,
       },
     };
   }
@@ -2132,8 +2139,8 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     // 记一笔用量 —— 缓存有没有命中，只有 finish 里的 usage 说得清。
     // 不写日志（debugLog 默认关着），写 manifest：任何时候都能查。
     try {
-      const u = finishChunk?.usage ?? finishChunk?.data?.usage;
-      markPick(pool.length, lines.length, u);
+      const u = finishChunk?.usage ?? finishChunk?.data?.usage ?? finishChunk?.detail?.usage;
+      markPick(pool.length, lines.length, u, finishChunk);
       await persist();
     } catch (err) {
       warn(`挑往事：记用量失败（不影响结果）：${err instanceof Error ? err.message : String(err)}`);
