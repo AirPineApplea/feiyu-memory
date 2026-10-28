@@ -619,7 +619,7 @@ export function apply(ctx, rawConfig) {
    *
    * 所以：每次挑完把 usage 落进 manifest，谁都能一眼看见。
    */
-  function markPick(entries, lines, usage, finishChunk, chunkTypes, chunkShape) {
+  function markPick(entries, lines, usage) {
     const u = usage ?? {};
     archive.manifest = {
       ...archive.manifest,
@@ -632,9 +632,6 @@ export function apply(ctx, rawConfig) {
         outputTokens: Number.isFinite(u.outputTokens) ? u.outputTokens : null,
         // 取不到 usage 的时候，把 finish 的形状留下来 —— 别再猜字段名。
         // 只留前 300 字，够看清结构，不至于把整段响应塞进档案。
-        // 探针：所有 chunk 类型 + 第一个非文本 chunk 的形状
-        chunkTypes: Array.isArray(chunkTypes) ? chunkTypes.join(',') : undefined,
-        chunkShape: u === undefined ? chunkShape : undefined,
       },
     };
   }
@@ -2101,9 +2098,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
 
     const t0 = Date.now();
     let text = '';
-    let finishChunk;
-    let chunkShape;
-    const seenChunkTypes = new Set();
+    let usageChunk;
     try {
       for await (const chunk of llmP.stream({
         provider,
@@ -2128,17 +2123,11 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
           : {}),
       })) {
         if (chunk?.type === 'text-delta') text += chunk.text;
-        else {
-          // finish 里没有 usage（实测只有 type/reason/replayState）。
-          // 所以把所有非文本 chunk 的类型记下来，并在第一次看到一个带
-          // 数字字段的 chunk 时留下它的形状 —— **别再猜字段名了。**
-          seenChunkTypes.add(String(chunk?.type ?? '?'));
-          const hasUsageish = chunk && typeof chunk === 'object' &&
-            (chunk.usage !== undefined || chunk.inputTokens !== undefined || chunk.cacheReadTokens !== undefined);
-          if (hasUsageish) finishChunk = chunk;
-          else if (chunkShape === undefined && chunk && typeof chunk === 'object') {
-            chunkShape = JSON.stringify(chunk).slice(0, 300);
-          }
+        else if (chunk?.type === 'usage') {
+          // 实测（2026-10-28）：usage 不在 finish 上，它是**独立的一种 chunk**。
+          // chunkTypes 探针打出来是 block-start,block-end,usage,finish ——
+          // 我猜了两轮字段名才看到这个。
+          usageChunk = chunk;
         }
       }
     } catch (err) {
@@ -2149,8 +2138,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     // 记一笔用量 —— 缓存有没有命中，只有 finish 里的 usage 说得清。
     // 不写日志（debugLog 默认关着），写 manifest：任何时候都能查。
     try {
-      const u = finishChunk?.usage ?? finishChunk?.data?.usage ?? finishChunk?.detail?.usage;
-      markPick(pool.length, lines.length, u, finishChunk, [...seenChunkTypes], chunkShape);
+      markPick(pool.length, lines.length, usageChunk?.usage ?? usageChunk?.data ?? usageChunk);
       await persist();
     } catch (err) {
       warn(`挑往事：记用量失败（不影响结果）：${err instanceof Error ? err.message : String(err)}`);
