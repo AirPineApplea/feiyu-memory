@@ -553,7 +553,11 @@ export function apply(ctx, rawConfig) {
             messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
             maxTokens: 600,
             temperature: 0,
-            reasoningEffort: '',
+            // 空字符串是非法档位 —— 实测会让 stream 直接不返回。
+            // 跟固化那边保持一致：只有配置里真有值才传。
+            ...(typeof config.reasoningEffort === 'string' && config.reasoningEffort.trim() !== ''
+              ? { reasoningEffort: config.reasoningEffort.trim() }
+              : {}),
           })) {
             if (chunk?.type === 'text-delta') text += chunk.text;
           }
@@ -2033,7 +2037,10 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         messages: [{ role: 'user', content: [{ type: 'text', text: `她问：${query}\n\n索引：\n${lines.join('\n')}` }] }],
         maxTokens: 200,
         temperature: 0,
-        reasoningEffort: '',
+        // 同上：空字符串是非法档位，stream 会不返回
+        ...(typeof config.reasoningEffort === 'string' && config.reasoningEffort.trim() !== ''
+          ? { reasoningEffort: config.reasoningEffort.trim() }
+          : {}),
       })) {
         if (chunk?.type === 'text-delta') text += chunk.text;
       }
