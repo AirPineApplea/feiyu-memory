@@ -21,7 +21,22 @@ const IDF_SMOOTH = 1;
 /**
  * 建倒排索引。纯派生数据，随用随建。
  *
- * @param {Array<{id: string, keywords?: string[], text?: string}>} entries
+ * ── 2026-10-28：索引的数据源从「keywords + 正文」换成 **summary** ──
+ *
+ * 原来一条日记存两份提炼：`keywords`（12 个词，机器从正文切的）和
+ * `summary`（一句，模型写的）。倒排索引吃前者，大保底（recall）吃后者。
+ *
+ * 而 summary 本来就比 keywords 更适合字面匹配 ——
+ * 它带别名（「边缘行者2 / 续集 / 那部动画」），keywords 只取正文里出现过的词。
+ * 一份数据喂两个地方，另一份就是纯多余的。
+ *
+ * 所以现在：**一条日记只有一个"检索表示"。**
+ *   小保底（每轮自动注入）  字面匹配 summary —— 便宜
+ *   大保底（她主动查）      模型读 summary   —— 准
+ *
+ * 没有 summary 的用正文兜底（老条目在回填完之前就是这样）。
+ *
+ * @param {Array<{id: string, summary?: string, text?: string}>} entries
  * @returns {{postings: Map<string, Map<string, number>>, df: Map<string, number>, lengths: Map<string, number>, N: number}}
  */
 export function buildIndex(entries) {
@@ -31,14 +46,8 @@ export function buildIndex(entries) {
   const list = Array.isArray(entries) ? entries : [];
 
   for (const entry of list) {
-    // 以正文为主索引；已存的关键词额外加权（重复计入），因为它们是刻意提炼过的
-    const tokens = tokenize(entry.text ?? '');
-    if (Array.isArray(entry.keywords)) {
-      for (const k of entry.keywords) {
-        const kt = tokenize(k);
-        tokens.push(...kt, ...kt);
-      }
-    }
+    const hasSummary = typeof entry.summary === 'string' && entry.summary !== '';
+    const tokens = tokenize(hasSummary ? entry.summary : (entry.text ?? ''));
     if (tokens.length === 0) continue;
 
     const tf = new Map();

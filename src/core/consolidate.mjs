@@ -10,7 +10,6 @@
  *  3. **失败一律降级**：解析不出来就丢弃并记日志，绝不把半成品写进档案。
  */
 
-import { extractKeywords } from './keywords.mjs';
 import { scrub } from './privacy.mjs';
 // 这里原本还 import 了 archive.mjs 的 ensurePersonaStructure / ANCHOR_END /
 // LEARNED_HEADING —— 它们只被 appendPersonaLearnings 用。那个函数删了，
@@ -531,7 +530,6 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
         text: merged,
         salience: Math.max(next.diary[i].salience ?? 0, sal),
         updated_at: now,
-        keywords: extractKeywords(merged, { max: 12 }),
       };
       notes.push('续写到已有那条');
       accepted = true;
@@ -558,7 +556,6 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
           text: fresh.slice(0, appendMax),
           salience: Math.max(next.diary[i].salience ?? 0, sal),
           updated_at: now,
-          keywords: extractKeywords(fresh.slice(0, appendMax), { max: 12 }),
         };
         notes.push(`模型写了完整版（相似度 ${sim.toFixed(2)}），按续写处理，替换原条目`);
         accepted = true;
@@ -604,7 +601,6 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
         // 轮次：下一轮靠它判断"这是不是同一件事还没写完"
         ...(Number.isFinite(context.sessionTurn) ? { turn: context.sessionTurn } : {}),
         created_at: now,
-        keywords: extractKeywords(text, { max: 12 }),
       });
       accepted = true;
       next.manifest.session_count = next.manifest.session_count ?? 0;

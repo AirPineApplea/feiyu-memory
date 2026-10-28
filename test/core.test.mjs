@@ -316,3 +316,32 @@ test('recall: 空索引不抛错', () => {
   const { chosen } = selectMemories([], idx, '随便', { lastShownTurn: new Map() }, 1);
   assert.deepEqual(chosen, []);
 });
+
+
+/* ───────────── 索引的数据源：summary 而不是 keywords ───────────── */
+
+test('索引吃 summary —— 正文里没有的词，靠 summary 也能命中', () => {
+  // 2026-10-28：一条日记只有一个检索表示（summary）。
+  // 这是它跟老版本的分界：老版本拿正文 + keywords 建索引，
+  // 正文里没写别名就搜不到；summary 是专为"找"写的，别名都在。
+  const idx = buildIndex([
+    { id: 'd1', text: '他说这部不好看，我说是编剧的问题。', summary: '边缘行者2·赛博朋克续集·五十岚海·他嫌洗白' },
+    { id: 'd2', text: '他熬到半夜剪视频。', summary: '剪视频·半夜·两个视频·最耗时的活' },
+  ]);
+  const hits = searchScores(idx, '赛博朋克', { limit: 10 });
+  assert.ok(hits.has('d1'), 'summary 里的别名应该命中');
+  assert.ok(!hits.has('d2'), '无关的条目不该被命中');
+});
+
+test('索引吃 summary —— 没有 summary 的条目用正文兜底', () => {
+  const idx = buildIndex([{ id: 'd1', text: '他熬到半夜剪视频。' }]);
+  const hits = searchScores(idx, '剪视频', { limit: 10 });
+  assert.ok(hits.has('d1'), '还没补 summary 的老条目不能搜不到');
+});
+
+test('索引不再吃 keywords —— 只有 keywords 的条目检索不到', () => {
+  // 字段还在档案里（老数据没删），但它已经不是检索的数据源了。
+  const idx = buildIndex([{ id: 'd1', keywords: ['赛博朋克', '边缘行者'], text: '' }]);
+  const hits = searchScores(idx, '赛博朋克', { limit: 10 });
+  assert.equal(hits.has('d1'), false, 'keywords 不再参与建索引');
+});

@@ -578,7 +578,7 @@ test('apply: skip 不产生日记', () => {
   assert.equal(r.archive.diary.length, 0);
 });
 
-test('apply: 正常写入一条日记并带上关键词', () => {
+test('apply: 正常写入一条日记（keywords 已停产出，靠 summary 检索）', () => {
   const a = createEmptyArchive(NOW, 'x');
   const r = applyConsolidation(a, parseConsolidation(GOOD), { now: NOW, session: 's1' });
   assert.equal(r.accepted, true);
@@ -587,7 +587,8 @@ test('apply: 正常写入一条日记并带上关键词', () => {
   assert.equal(e.kind, 'failure');
   assert.equal(e.resolved, false);
   assert.equal(e.session, 's1');
-  assert.ok(e.keywords.length > 0, '应自动提炼关键词');
+  // 2026-10-28：keywords 停止产出 —— 倒排索引改吃 summary，一份数据两处用
+  assert.equal(e.keywords, undefined, 'keywords 不再产出');
   // tags 2026-10-27 停止产出
   assert.deepEqual(e.tags, []);
 });
