@@ -1222,7 +1222,7 @@ test('recall: 工具注册上了，描述里说清了「什么时候用」', asy
     apply(h.ctx, { dataDir: dataDirFor(home), debugLog: false });
     const tool = h.tools.get('feiyu_recall');
     assert.ok(tool, 'feiyu_recall 必须注册');
-    assert.match(tool.description, /不知道那天发生过什么/, '要说清触发时机');
+    assert.match(tool.description, /想不起来/, '要说清触发时机');
     assert.match(tool.description, /不要每轮都查/, '要拦住滥用');
     assert.match(tool.description, /别编/, '找不到不许编');
   });
@@ -1265,7 +1265,7 @@ test('recall: 查不到就老实说，不许编', async () => {
     const r = await callRecall(h, { query: '量子引力波干涉仪' });
     assert.equal(r.ok, true);
     assert.equal(r.found, 0);
-    assert.match(r.text, /没找到/);
+    assert.match(r.text, /想不起来了/);
   }, { seed: makeSeed() });
 });
 

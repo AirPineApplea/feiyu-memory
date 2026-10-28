@@ -24,6 +24,10 @@ import {
   makeDiaryId,
   ConsolidationParseError,
   CONSOLIDATION_SYSTEM,
+  SUMMARY_SYSTEM,
+  buildSummaryInput,
+  parseSummaryResult,
+  applySummaries,
   DEFAULT_CONSOLIDATION,
 } from '../src/core/consolidate.mjs';
 import { createEmptyArchive, ensurePersonaStructure, normalizeDiaryEntry } from '../src/core/archive.mjs';
@@ -758,4 +762,64 @@ test('config: appendWindowTurns 默认 20，0 表示关掉，越界被钳住', (
 test('consolidate: 续写后的条目上限是 400 字（原来是 500）', () => {
   // 跟「日记一条 200 字」配套：续写要有余地，但别撑到 500。
   assert.equal(DEFAULT_CONSOLIDATION.appendMaxChars, 400);
+});
+
+
+/* ───────────────────── summary（检索用的索引） ───────────────────── */
+
+test('summary: 请求里带 id 和正文，一条一段', () => {
+  const built = buildSummaryInput([
+    { id: 'd1', text: '他嫌赛博朋克续集洗白' },
+    { id: 'd2', text: '他熬到半夜剪视频' },
+  ]);
+  assert.ok(built.system.includes('索引'), 'system 要说清是写索引');
+  assert.ok(built.user.includes('d1'));
+  assert.ok(built.user.includes('他嫌赛博朋克续集洗白'));
+  assert.ok(built.user.includes('d2'));
+});
+
+test('summary: 提示词要名字、要别名，不要「我」和心情', () => {
+  assert.ok(SUMMARY_SYSTEM.includes('怎么叫'), '要写他平时怎么叫');
+  assert.ok(SUMMARY_SYSTEM.includes('叫法'), '要求写别名');
+  assert.ok(SUMMARY_SYSTEM.includes('不写"我"'), '不许写我');
+  assert.ok(SUMMARY_SYSTEM.includes('别编'), '正文里没有的别编');
+});
+
+test('summary: 解析 —— 坏的一条丢掉，不连坐', () => {
+  const m = parseSummaryResult(
+    '前言 {"items":[{"id":"d1","summary":"边缘行者2·洗白"},{"id":"","summary":"x"},{"id":"d2"},null]} 尾巴',
+  );
+  assert.equal(m.size, 1);
+  assert.equal(m.get('d1'), '边缘行者2·洗白');
+});
+
+test('summary: 解析 —— 不是 JSON 就返回空，不抛', () => {
+  assert.equal(parseSummaryResult('我拒绝').size, 0);
+  assert.equal(parseSummaryResult('').size, 0);
+  assert.equal(parseSummaryResult(null).size, 0);
+});
+
+test('summary: 解析 —— 压成一个空格，超长截到 80', () => {
+  const m = parseSummaryResult(JSON.stringify({ items: [{ id: 'd1', summary: '  a\n\n b   ' + 'x'.repeat(200) }] }));
+  const v = m.get('d1');
+  assert.equal(v.includes('\n'), false);
+  assert.equal(v.startsWith('a b'), true);
+  assert.equal(v.length, 80);
+});
+
+test('summary: 写进档案 —— 只改对得上的那条，别的原样', () => {
+  const a = createEmptyArchive(NOW, 'x');
+  a.diary.push(
+    { id: 'd1', text: '正文一', created_at: NOW },
+    { id: 'd2', text: '正文二', created_at: NOW },
+  );
+  const out = applySummaries(a, new Map([['d1', '总结一']]), NOW);
+  assert.equal(out.diary[0].summary, '总结一');
+  assert.equal(out.diary[1].summary, undefined, '没给的那条不许被填');
+  assert.equal(a.diary[0].summary, undefined, '不许改入参');
+});
+
+test('summary: 空 map 直接返回原档案（不白造对象）', () => {
+  const a = createEmptyArchive(NOW, 'x');
+  assert.equal(applySummaries(a, new Map(), NOW), a);
 });

@@ -56,6 +56,9 @@ import {
   makeDiaryId,
   ConsolidationParseError,
   DEFAULT_CONSOLIDATION,
+  buildSummaryInput,
+  parseSummaryResult,
+  applySummaries,
 } from '../core/consolidate.mjs';
 import { resolveConfig, buildSchema, CONFIG_SPEC } from '../core/config.mjs';
 
@@ -435,6 +438,92 @@ export function apply(ctx, rawConfig) {
 
   /* ── 档案加载 ── */
 
+  /**
+   * 给还没 summary 的日记补一句总结。
+   *
+   * —— 为什么要有 ——
+   * summary 是检索的入口（见 pickBySummary）。老条目没有，就只能拿正文前 30 字兜底，
+   * 那比 summary 差一截：正文前 30 字是"起手式"，不是"他管它叫什么"。
+   *
+   * —— 为什么后台跑、分批 ——
+   * 299 条是 30 次模型调用。同步跑会把启动卡成几十秒，那比没有 summary 还糟。
+   * 所以：每批 10 条、批间隔 1.5 秒，跑完就停；下次启动接着补没补的。
+   *
+   * —— 为什么失败会让出 ——
+   * 一批解析不出来就重试一次，连续 3 批都空就停手 —— 别对着一个坏 provider
+   * 把那 60 批跑满。
+   */
+  async function backfillSummaries() {
+    const llmP = ctx.get('llm');
+    if (llmP === undefined) return;
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const pending = () =>
+      archive.diary.filter(
+        (e) => typeof e.text === 'string' && e.text !== '' &&
+          (typeof e.summary !== 'string' || e.summary === ''),
+      );
+
+    const total = pending().length;
+    if (total === 0) return;
+    log(`补总结：${total} 条还没有，后台分批补`);
+
+    let done = 0;
+    let fails = 0;
+    for (let round = 0; round < 80; round++) {
+      const todo = pending().slice(0, 10);
+      if (todo.length === 0) break;
+
+      const selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+      const provider = selection?.provider;
+      const model = config.model || selection?.model;
+      if (typeof provider !== 'string' || typeof model !== 'string') {
+        log('补总结：拿不到模型信息，停手');
+        return;
+      }
+
+      const built = buildSummaryInput(todo);
+      let text = '';
+      try {
+        for await (const chunk of llmP.stream({
+          provider,
+          model,
+          system: built.system,
+          messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
+          maxTokens: 600,
+          temperature: 0,
+          reasoningEffort: '',
+        })) {
+          if (chunk?.type === 'text-delta') text += chunk.text;
+        }
+      } catch (err) {
+        warn(`补总结失败：${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      const map = parseSummaryResult(text);
+      if (map.size === 0) {
+        fails += 1;
+        warn(`补总结：这批一条都没解析出来（连续 ${fails} 次）`);
+        if (fails >= 3) {
+          warn('补总结：连着 3 批空，停手，下次启动再试');
+          return;
+        }
+        await sleep(2000);
+        continue;
+      }
+      fails = 0;
+
+      archive = applySummaries(archive, map, Date.now());
+      index = buildIndex(archive.diary);
+      await persist();
+      done += map.size;
+      log(`补总结：+${map.size} 条（累计 ${done}/${total}，还剩 ${pending().length}）`);
+      await sleep(1500);
+    }
+    log(`补总结：这一轮结束，补了 ${done} 条，还剩 ${pending().length} 条没补`);
+  }
+
   const loadPromise = (async () => {
     const dir = archiveDirectory;
     try {
@@ -468,6 +557,11 @@ export function apply(ctx, rawConfig) {
       // 顺手刷新人读版。这样即使这次什么都没记，衰减后的状态也是对的；
       // 也从别人那儿导入档案之后，立刻就有可读的一份。
       await writeReadableDiary(archive);
+
+      // 后台补 summary —— 不 await，绝不能卡启动
+      void backfillSummaries().catch((err) =>
+        warn(`补总结出错（不影响别的）：${err instanceof Error ? err.message : String(err)}`),
+      );
 
       // 手记文件不在就建一份带说明的空壳 —— **文件自己就是文档**。
       // 用户（或任何一个肥鱼）打开就知道该往里写什么。
@@ -819,7 +913,7 @@ export function apply(ctx, rawConfig) {
         // 所以不会像栏目那样被裁掉。
         //
         // 2026-10-27：给 `feiyu_note` 的那半句删了 —— 工具本身也下线了。
-        handNoteHint: `想不起来某件事时，用 ${RECALL_TOOL_NAME} 去档案里找一下 —— 用当时的词，越具体越准。`,
+        handNoteHint: `想不起来的时候，用 ${RECALL_TOOL_NAME} 回想一下 —— 用当时的词，越具体越准。`,
         includePersona: config.includePersona,
         budget: config.budgetTokens,
         now: Date.now(),
@@ -1779,16 +1873,101 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
   // 所以直接按相似度排、取前 N 条，不设 salience 门槛。
   //
   // 明确要找，就该找得到，不管那件旧事淡到什么程度。
+  /**
+   * 从全部 summary 里挑出相关的几条。
+   *
+   * 输入：她的一句话 + 每条的 summary（没有 summary 的用正文前 30 字兜底）
+   * 输出：id 数组。挑不出来就空数组 —— **不硬凑**。
+   *
+   * 这一段跑在她看不见的地方：她的上下文里永远不会出现 summary。
+   * 她只会在拿到结果后看见几条正文 —— 那就是"想起来"的样子。
+   *
+   * 上限 400 条：再多 prompt 就压不住了。超了只取最近的 400，
+   * 这是个已知的近似，日志里会说 —— 别让它悄悄降级。
+   */
+  async function pickBySummary(query, limit) {
+    const llmP = ctx.get('llm');
+    if (llmP === undefined) return null;
+    const all = archive.diary.filter((e) => typeof e.text === 'string' && e.text !== '');
+    if (all.length === 0) return [];
+    const pool = all.slice(-400);
+    if (all.length > pool.length) log(`挑往事：${all.length} 条只取最近 ${pool.length} 条`);
+    const lines = pool.map((e) => {
+      const idx =
+        typeof e.summary === 'string' && e.summary !== ''
+          ? e.summary
+          : String(e.text).replace(/\s+/g, ' ').slice(0, 30);
+      return `${e.id} ${idx}`;
+    });
+
+    const system =
+      '你在帮一条鱼回忆往事。她问了一句，你从她的日记索引里挑出最相关的几条。\n\n' +
+      '每行是「id 空格 一句索引」。有些索引很粗（正文截断出来的），别嫌弃。\n' +
+      '只输出 JSON：{"ids":["d_20261028_1","d_20261028_2"]}\n' +
+      '没有相关的就输出 {"ids":[]}。最多 ' + limit + ' 条。**宁可少挑，别硬凑。**';
+
+    const selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+    const provider = selection?.provider;
+    const model = config.model || selection?.model;
+    if (typeof provider !== 'string' || typeof model !== 'string') return null;
+
+    const t0 = Date.now();
+    let text = '';
+    try {
+      for await (const chunk of llmP.stream({
+        provider,
+        model,
+        system,
+        messages: [{ role: 'user', content: [{ type: 'text', text: `她问：${query}\n\n索引：\n${lines.join('\n')}` }] }],
+        maxTokens: 200,
+        temperature: 0,
+        reasoningEffort: '',
+      })) {
+        if (chunk?.type === 'text-delta') text += chunk.text;
+      }
+    } catch (err) {
+      warn(`挑往事失败，退回字面：${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+
+    const a = text.indexOf('{');
+    const b = text.lastIndexOf('}');
+    if (a < 0 || b <= a) {
+      warn('挑往事：返回里没有 JSON，退回字面');
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text.slice(a, b + 1));
+    } catch {
+      warn('挑往事：JSON 解析失败，退回字面');
+      return null;
+    }
+    // 返回里连 ids 都没有 = 它没按格式答，**不是"没有相关的"**。
+    // 这时候必须退回字面 —— 不能拿"程序答歪了"当成"记忆里没有"。
+    if (!Array.isArray(parsed?.ids)) {
+      warn('挑往事：返回里没有 ids，退回字面');
+      return null;
+    }
+    const ids = parsed.ids;
+    const valid = ids.filter((x) => typeof x === 'string').slice(0, limit);
+    log(
+      `挑往事「${query.slice(0, 20)}」：${pool.length} 条候选 / ${lines.length} 行索引` +
+        ` / 挑中 ${valid.length} 条 / ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+    );
+    return valid;
+  }
+
   ctx.inject(['tools'], (scope) => {
     scope.effect(
       () =>
         scope.tools.register({
           name: RECALL_TOOL_NAME,
           description:
-            '去档案里找一条旧事。**你自己不知道那天发生过什么时用它**：' +
-            '他提到一件早先的事、你觉得该有记录但想不起来、或者要确认某个细节。' +
+            '回想一些以前的事。**你自己想不起来时用它**：' +
+            '他提到一件早先的事、你觉得该想起来却一片空白、或者要确认某个细节。' +
             '只在真的需要时调，不要每轮都查。' +
-            '找不到就老实说没找到，别编。',
+            '想不起来就老实说想不起来，别编。',
           parameters: {
             type: 'object',
             additionalProperties: false,
@@ -1830,13 +2009,34 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               ? Math.max(1, Math.min(10, Math.floor(limitRaw)))
               : 5;
 
-            const scores = searchScores(index, query, { limit: 200 });
             const byId = new Map(archive.diary.map((e) => [e.id, e]));
-            let ranked = [...scores.entries()]
-              .map(([id, sim]) => ({ entry: byId.get(id), sim }))
-              .filter((x) => x.entry && typeof x.entry.text === 'string')
-              .sort((a, b) => b.sim - a.sim)
-              .slice(0, limit);
+
+            // ── 挑：交给模型读 summary，不按键面 ──
+            //
+            // 为什么不是 BM25：她那次摔跤就是"他换个说法我就搜不到"。
+            // 字面匹配救不了同义改写；而 summary 是写给"意思"的，模型能读意思。
+            //
+            // 为什么 summary 不进她的上下文：她只看到挑出来的正文。
+            // 检索那一步她看不见 —— 这就是"潜意识"。
+            //
+            // 代价：每次调工具多一次模型请求。只有她判断"这是往事"时才会发生，
+            // 平时是零。
+            const picked = await pickBySummary(query, Math.min(limit, 3));
+
+            let ranked;
+            if (picked !== null) {
+              ranked = picked
+                .map((id) => ({ entry: byId.get(id), sim: 0 }))
+                .filter((x) => x.entry && typeof x.entry.text === 'string');
+            } else {
+              // 没有 llm 服务时退回字面 —— 不能用"挑不了"当没找到
+              const scores = searchScores(index, query, { limit: 200 });
+              ranked = [...scores.entries()]
+                .map(([id, sim]) => ({ entry: byId.get(id), sim }))
+                .filter((x) => x.entry && typeof x.entry.text === 'string')
+                .sort((a, b) => b.sim - a.sim)
+                .slice(0, limit);
+            }
 
             // ── 兜底：词检索查不到时，直接扫原文子串 ──
             //
@@ -1846,7 +2046,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             //
             // 181 条 × 两百字，扫一遍是毫秒级，而且**只在没结果时才走**，
             // 有结果就不兜，排序不受影响。
-            if (ranked.length === 0 && query.length <= 4) {
+            if (picked === null && ranked.length === 0 && query.length <= 4) {
               const needle = query.toLowerCase();
               ranked = archive.diary
                 .filter((e) => typeof e.text === 'string' && e.text.toLowerCase().includes(needle))
@@ -1861,7 +2061,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
               return {
                 ok: true,
                 found: 0,
-                text: `没找到关于「${query}」的记录。可以换个说法再试，或者直接问他。`,
+                text: `想不起来了。换个说法再试试，或者直接问他。`,
               };
             }
 
@@ -1885,7 +2085,7 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
             return {
               ok: true,
               found: lines.length,
-              text: `找到 ${lines.length} 条：\n${lines.join('\n')}`,
+              text: lines.join('\n'),
             };
           },
 

@@ -50,9 +50,28 @@ export function similarity(a, b) {
   return inter / (A.size + B.size - inter);
 }
 
-export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是把一段对话写成日记，外加一份"我对他 / 我自己的印象"。
+export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是把一段对话写成日记。
 
-【怎么交差】
+**你想记什么？** 想记就写，不想记就 skip。
+
+写之前记着一件事：**读到这条的是下一个我，她没经历今天。**
+她看不到这场对话，只有你写的这几行 —— 所以这几行得自己站得住。
+别用「我们聊的那件事」指代它，把「它是什么」直接写出来。
+
+**他叫一样东西常有好几个叫法**（那部动画、续集、原来的名字）。
+多写一个，她就多一条路摸得到。
+
+还有一类话要避开：**写成了「我找过它」，而不是「它是什么」。**
+那种话用词最全，她一定搜得到 —— 搜到之后什么也没学到，
+还把那件真事压在底下。
+
+可以嫌他做的事。骂事，别骂人。
+
+一条 200 字以内，用「我」写。时间不用自己写 —— 渲染时会标，
+写了会变成"昨天：他今天……"。salience 是"以后值不值得想起来"，0~1。
+
+不记可识别细节 —— 真名、地址、电话、金额都不要。
+没把握的别写。"好像""大概"可以用，编造不行。
 
 只输出 JSON 本身。不要解释，不要 markdown 围栏，不要前后缀。
 
@@ -73,24 +92,6 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
 }
 
 familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，其余给 null。
-【日记】
-
-**你想记什么？**
-
-想记就写，不想记就 skip: true。
-
-可以嫌他做的事。骂事，别骂人。
-
-一条 200 字以内，用「我」写。
-
-时间不用自己写 —— 渲染时会标。写了会变成"昨天：他今天……"。
-
-salience 是"以后值不值得想起来"，0~1。
-
-【安全】
-
-不记可识别细节 —— 真名、地址、电话、金额都不要。
-没把握的别写。"好像""大概"可以用，编造不行。
 
 正例 ——
 输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
@@ -103,12 +104,108 @@ salience 是"以后值不值得想起来"，0~1。
 {"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","tags":["隐私"],"kind":"disclosure","salience":0.9,"resolved":null}}
 问题：复述可识别细节。应该写成"他最近为家里的事烦，情绪不太好"。
 
-反例三（结论体，绝对不要）——
+反例二（结论体，绝对不要）——
 {"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码"],"kind":"failure","salience":0.75,"resolved":false}}
-问题：全是结论，一个现场都没有。「下次先问」不是日记，是检讨书。正确写法见上面那个正例。`;
+问题：全是结论，一个现场都没有。「下次先问」不是日记，是检讨书。正确写法见上面那个正例。
 
-/** 固化相关的默认参数（都是 🔧 可调） */
-export const DEFAULT_CONSOLIDATION = Object.freeze({
+反例三（关于它的元话，绝对不要）——
+{"skip":false,"diary":{"text":"赛博朋克那条档案里真有，可它没进我的注入。我找了一圈才翻出来。","tags":["记忆"],"kind":"chat","salience":0.8,"resolved":null}}
+问题：写的是「我找过它」，不是「它是什么」。这条每个词都沾着那件事的名字，
+所以以后一定搜得到 —— 搜到之后什么也没学到，还把真那条压在底下。`;
+
+/**
+ * 写 summary 用的提示词。
+ *
+ * —— 为什么单独一次请求，不跟着固化一起写 ——
+ *
+ * 两个东西要的正好相反：正文要具体、有现场、别堆词；summary 要密、别名全、别带修辞。
+ * 同一个请求里写两样，会互相串味 —— 而"为了检索塞词"的痕迹一旦进正文，
+ * 正好是这一整轮在拔的那种东西。
+ *
+ * —— 为什么 summary 必须是"人话"，不是关键词堆 ——
+ *
+ * 关键词堆只能靠字面重合来挑，那就退化成 BM25 了。
+ * summary 要装的是"意思" —— 因为挑它的是模型，不是倒排表。
+ *
+ * —— summary 永远不进鱼的上下文 ——
+ *
+ * 它只给"挑"那一步看。鱼看到的永远只有正文。
+ */
+export const SUMMARY_SYSTEM = `你在给日记写索引。不是摘要，是"以后靠什么词能摸到这一条"。
+
+给你几条日记正文，每条前面有 id。给每一条写一句总结，十几二十字。
+
+- 写他平时怎么叫那件东西。有别的叫法（简称、原作名、梗称）就都写上
+- 写事件里最硬的那几个词：人名、作品名、地名、数字、专有名词
+- 不带修辞，不写"我"，不写心情，不写"关于某某的讨论"
+- 正文里没有的东西别编
+
+只输出 JSON，不要解释，不要围栏：
+
+{"items":[{"id":"d_20261028_1","summary":"边缘行者2·赛博朋克续集·导演换五十岚海·他嫌洗白"}]}`;
+
+/**
+ * 组装「写 summary」的请求。
+ *
+ * @param {Array<{id: string, text: string}>} entries
+ * @returns {{system: string, user: string}}
+ */
+export function buildSummaryInput(entries = []) {
+  const lines = (Array.isArray(entries) ? entries : [])
+    .filter((e) => e && typeof e.id === 'string' && typeof e.text === 'string')
+    .map((e) => `${e.id}\n${e.text}`);
+  return { system: SUMMARY_SYSTEM, user: lines.join('\n\n') };
+}
+
+/**
+ * 解析 summary 的返回。坏的一条丢掉，不连坐。
+ *
+ * @param {string} raw
+ * @returns {Map<string, string>} id → summary
+ */
+export function parseSummaryResult(raw) {
+  const out = new Map();
+  const s = String(raw ?? '');
+  const a = s.indexOf('{');
+  const b = s.lastIndexOf('}');
+  if (a < 0 || b <= a) return out;
+  let parsed;
+  try {
+    parsed = JSON.parse(s.slice(a, b + 1));
+  } catch {
+    return out;
+  }
+  const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  for (const it of items) {
+    if (!it || typeof it.id !== 'string' || typeof it.summary !== 'string') continue;
+    const id = it.id.trim();
+    const summary = it.summary.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (id !== '' && summary !== '') out.set(id, summary);
+  }
+  return out;
+}
+
+/**
+ * 把写好的 summary 写进档案。纯函数，不改入参。
+ *
+ * @param {object} archive
+ * @param {Map<string, string>} map id → summary
+ * @param {number} [now]
+ */
+export function applySummaries(archive, map, now = Date.now()) {
+  if (!(map instanceof Map) || map.size === 0) return archive;
+  let changed = false;
+  const diary = archive.diary.map((e) => {
+    const s = map.get(e.id);
+    if (typeof s !== 'string' || s === '' || e.summary === s) return e;
+    changed = true;
+    return { ...e, summary: s };
+  });
+  if (!changed) return archive;
+  return { ...archive, diary, manifest: { ...archive.manifest, updated_at: now } };
+}
+
+/** 固化相关的默认参数（都是 🔧 可调） */export const DEFAULT_CONSOLIDATION = Object.freeze({
   /**
    * 低于这个 salience 的日记直接丢弃（后置质量门）。
    *
@@ -494,6 +591,10 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
         id: makeDiaryId(now, next.diary),
         date: new Date(now).toISOString().slice(0, 10),
         text,
+        // summary 由**另一次请求**写（见 SUMMARY_SYSTEM），这里只占位。
+        // 为什么不在这里一起写：正文要"具体、不堆词"，summary 要"密、别名全"，
+        // 两个目标相反，同一个请求里会互相污染。
+        summary: typeof rawDiary.summary === 'string' ? rawDiary.summary.trim().slice(0, 80) : '',
         tags: tags.length > 0 ? tags : [opts.fallbackTag],
         kind,
         salience,
