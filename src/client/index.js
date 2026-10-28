@@ -166,8 +166,8 @@ window.__ModuleLoader__.load({
             },
           },
           h('span', null, when),
-          e.tags && e.tags.length > 0 ? h('span', { style: { opacity: 0.6 } }, '·') : null,
-          h('span', null, (e.tags || []).join(' · ')),
+          // tags（给这条日记贴分类）2026-10-27 停止产出，不再显示。
+          // 老数据还在文件里，要看就翻日记.md 或 jsonl。
         ),
         h(
           'p',

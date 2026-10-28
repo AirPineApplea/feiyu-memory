@@ -588,7 +588,8 @@ test('apply: 正常写入一条日记并带上关键词', () => {
   assert.equal(e.resolved, false);
   assert.equal(e.session, 's1');
   assert.ok(e.keywords.length > 0, '应自动提炼关键词');
-  assert.equal(e.tags.length, 2);
+  // tags 2026-10-27 停止产出
+  assert.deepEqual(e.tags, []);
 });
 
 test('apply: salience 低于门槛的日记被丢弃（后置质量门）', () => {
@@ -600,12 +601,12 @@ test('apply: salience 低于门槛的日记被丢弃（后置质量门）', () =
   assert.ok(r.notes.some((n) => n.includes('低于门槛')));
 });
 
-test('apply: 没有标签时给兜底标签而不是丢弃（默认 requireTags=false）', () => {
+test('apply: 没有标签也照样记（tags 不产出了，但日记必须留下）', () => {
   const a = createEmptyArchive(NOW, 'x');
   const noTags = { skip: false, diary: { text: '值得记的一件事', tags: [], kind: 'chat', salience: 0.6 } };
   const r = applyConsolidation(a, noTags, { now: NOW });
-  assert.equal(r.accepted, true);
-  assert.deepEqual(r.archive.diary[0].tags, ['琐事']);
+  assert.equal(r.accepted, true, '不许因为没标签就丢');
+  assert.deepEqual(r.archive.diary[0].tags, []);
 });
 
 test('apply: 单次会话条数有硬上限', () => {

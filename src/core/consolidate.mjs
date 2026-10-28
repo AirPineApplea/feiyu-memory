@@ -79,7 +79,6 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
   "skip": boolean,
   "diary": {
     "text": string,
-    "tags": string[],
     "kind": "failure" | "win" | "chat" | "disclosure" | "grievance",
     "salience": number,
     "resolved": boolean | null
@@ -95,21 +94,21 @@ familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，
 
 正例 ——
 输入：用户说"不对，我说的是 Python，你怎么上来就写 Java"
-输出：{"skip":false,"diary":{"text":"他说「不对，我说的是 Python」的时候我手停了。我写 Java 之前根本没问过。\n\n那半秒里我还在想怎么把这段圆过去。","tags":["代码"],"kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01},"forget":[]}
+输出：{"skip":false,"diary":{"text":"他说「不对，我说的是 Python」的时候我手停了。我写 Java 之前根本没问过。\n\n那半秒里我还在想怎么把这段圆过去。","kind":"failure","salience":0.75,"resolved":false},"relationship":{"nickname":null,"familiarityDelta":0.01},"forget":[]}
 
 （注意这个正例写的是「手停了」「那半秒里我还在想怎么圆过去」——
 不是我悟出了什么道理。**那一下本身就够了，别再补"所以我以后要……"。**）
 
 反例一（复述隐私，绝对不要）——
-{"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","tags":["隐私"],"kind":"disclosure","salience":0.9,"resolved":null}}
+{"skip":false,"diary":{"text":"他说他女朋友叫小美，住在城东，手机号是13800000000。","kind":"disclosure","salience":0.9,"resolved":null}}
 问题：复述可识别细节。应该写成"他最近为家里的事烦，情绪不太好"。
 
 反例二（结论体，绝对不要）——
-{"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","tags":["代码"],"kind":"failure","salience":0.75,"resolved":false}}
+{"skip":false,"diary":{"text":"他让我写个东西，我没问清语言就动手了。白忙一轮。是我的错，下次先问。","kind":"failure","salience":0.75,"resolved":false}}
 问题：全是结论，一个现场都没有。「下次先问」不是日记，是检讨书。正确写法见上面那个正例。
 
 反例三（关于它的元话，绝对不要）——
-{"skip":false,"diary":{"text":"赛博朋克那条档案里真有，可它没进我的注入。我找了一圈才翻出来。","tags":["记忆"],"kind":"chat","salience":0.8,"resolved":null}}
+{"skip":false,"diary":{"text":"赛博朋克那条档案里真有，可它没进我的注入。我找了一圈才翻出来。","kind":"chat","salience":0.8,"resolved":null}}
 问题：写的是「我找过它」，不是「它是什么」。这条每个词都沾着那件事的名字，
 所以以后一定搜得到 —— 搜到之后什么也没学到，还把真那条压在底下。`;
 
@@ -595,7 +594,9 @@ export function applyConsolidation(archive, rawParsed, context = {}, options = {
         // 为什么不在这里一起写：正文要"具体、不堆词"，summary 要"密、别名全"，
         // 两个目标相反，同一个请求里会互相污染。
         summary: typeof rawDiary.summary === 'string' ? rawDiary.summary.trim().slice(0, 80) : '',
-        tags: tags.length > 0 ? tags : [opts.fallbackTag],
+        // tags（给这条日记贴分类）**2026-10-27 停止产出** ——
+        // 「这事属于哪一类」是判断，不是记录。字段留着（老数据还在），只写空数组。
+        tags: [],
         kind,
         salience,
         ...(kind === 'failure' ? { resolved: rawDiary.resolved === true } : {}),

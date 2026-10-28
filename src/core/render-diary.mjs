@@ -152,7 +152,7 @@ export function renderDiaryMarkdown(archive, options = {}) {
 
       const meta = [];
       if (Number.isFinite(entry.salience)) meta.push(`重要度 ${entry.salience.toFixed(2)}`);
-      if (Array.isArray(entry.tags) && entry.tags.length > 0) meta.push(entry.tags.join('、'));
+      // tags 2026-10-27 停止产出，不再往人读版里写（老数据还在 jsonl 里）
       if (entry.kind === 'failure') meta.push(entry.resolved === true ? '已解决' : '还欠着');
       if (typeof entry.id === 'string') meta.push(entry.id);
       if (meta.length > 0) {

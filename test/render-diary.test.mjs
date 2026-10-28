@@ -105,7 +105,8 @@ test('render: 条目带上人类可读的分类与状态，而不是枚举值', 
   assert.ok(!md.includes('failure'), '不该把枚举值直接漏给用户');
   assert.ok(md.includes('还欠着'), '未解决的失败要标出来');
   assert.ok(md.includes('重要度 0.70'));
-  assert.ok(md.includes('代码'));
+  // tags 2026-10-27 停止产出，人读版不再写它
+  assert.ok(!md.includes('代码'), '标签不再往人读版里写');
   assert.ok(md.includes('d1'), '带上 id，方便用户去 jsonl 里删');
 });
 
