@@ -490,21 +490,26 @@ test('apply: 寒暄不再是「无效信息」—— 低 salience 也能留下�
 
 
 
-test('提示词：判据是「哪一下让你停住了」，而且不许补意义', () => {
-  // 2026-10-27 判据整个换掉。原来问的是「能多知道点什么」——问信息，
-  // 留下的自然全是结论；再鼓励一句「寒暄也值得记」，那是往判据上加意义。
-  assert.ok(CONSOLIDATION_SYSTEM.includes('哪一下让你停住了'), '判据本体');
-  assert.ok(CONSOLIDATION_SYSTEM.includes('别替它补'), '不许补意义');
-  assert.ok(CONSOLIDATION_SYSTEM.includes('没停过就 skip'), '没停过要能跳过');
+test('提示词：判据就是「你想记什么」—— 一个字都不多加', () => {
+  // 判据的演化：
+  //   「能多知道点什么」  问信息 → 留下的全是结论
+  //   「哪一下让你停住了」 问现象 → 但"停住"是可抄的动作词，正文里长出一堆「我停了一下」
+  //   「你想记什么」      问欲望 → 不可抄，也不暗示意义
+  assert.ok(CONSOLIDATION_SYSTEM.includes('你想记什么'), '判据本体');
+  assert.ok(CONSOLIDATION_SYSTEM.includes('不想记就 skip'), '要能跳过');
 
-  // 2026-10-27：traits 砍了，evidence/说明书这两条也就没了
+  // 前两版的残骸不许回来
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('停住'), '"停住"是可抄的动作词，删了');
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('别替它补'), '那句话是防结论的，判据换了就不需要');
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('下一个我读到这条'), '旧的问法删了');
+
+  // traits / lexicon 不再产出
   assert.ok(!CONSOLIDATION_SYSTEM.includes('traits'), 'traits 不再产出');
   assert.ok(!CONSOLIDATION_SYSTEM.includes('lexicon'), 'lexicon 不再产出');
 
   // 被删掉的那些「多加」不许回来
   assert.ok(!CONSOLIDATION_SYSTEM.includes('寒暄'), '鼓励寒暄那句删了');
-  assert.ok(!CONSOLIDATION_SYSTEM.includes('【不写工作报告】'), '整节删了 —— 强判据让它多余');
-  assert.ok(!CONSOLIDATION_SYSTEM.includes('下一个我读到这条'), '旧的问法删了');
+  assert.ok(!CONSOLIDATION_SYSTEM.includes('【不写工作报告】'), '整节删了');
 });
 
 /* ───────────────────────── 解析 ───────────────────────── */

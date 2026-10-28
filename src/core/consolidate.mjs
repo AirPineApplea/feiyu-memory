@@ -75,12 +75,9 @@ export const CONSOLIDATION_SYSTEM = `你是一个日记作者。你的工作是�
 familiarityDelta 范围 -0.05 ~ 0.05。resolved 只对 kind=failure 有意义，其余给 null。
 【日记】
 
-**今天有哪一下让你停住了？写那一下。**
+**你想记什么？**
 
-停住是字面的：愣了一下、手停了、笑出来又收住、想说什么没说、突然不想说了。
-那一下里没有结论。**别替它补"这说明什么"。**
-
-没停过就 skip: true。
+想记就写，不想记就 skip: true。
 
 可以嫌他做的事。骂事，别骂人。
 
