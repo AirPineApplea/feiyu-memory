@@ -466,20 +466,6 @@ export function apply(ctx, rawConfig) {
     try {
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-      // 等 llm 和模型信息就绪 —— 启动瞬间它们常常还没挂上
-      const deadline = Date.now() + 120000;
-      for (;;) {
-        const llmNow = ctx.get('llm');
-        const sel = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
-        const mdl = config.model || sel?.model;
-        if (llmNow !== undefined && typeof sel?.provider === 'string' && typeof mdl === 'string') break;
-        if (Date.now() > deadline) {
-          warn('补总结：等了 2 分钟还没等到 llm 或模型信息，这次不补了');
-          return;
-        }
-        await sleep(2000);
-      }
-
       const pending = () =>
         archive.diary.filter(
           (e) =>
@@ -487,6 +473,40 @@ export function apply(ctx, rawConfig) {
             e.text !== '' &&
             (typeof e.summary !== 'string' || e.summary === ''),
         );
+
+      // ── 先留痕，再干活 ──
+      //
+      // 上一版把「证据」写成了"成功之后才记"，结果:241 条一条没补，
+      // manifest 里连个字段都没有，日志默认又是关的 ——
+      // **完全看不出它到底有没有跑过。**
+      //
+      // 现在：进门第一件事就是写状态 + 立刻落盘。
+      // 哪怕下一步就卡死，你也能从 manifest 里看到它走到哪儿了。
+      markBackfill(pending().length, 0, 'starting');
+      try {
+        await persist();
+      } catch (err) {
+        warn(`补总结：写状态失败（不影响别的）：${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // 等 llm 和模型信息就绪 —— 启动瞬间它们常常还没挂上
+      const deadline = Date.now() + 120000;
+      let waited = 0;
+      for (;;) {
+        const llmNow = ctx.get('llm');
+        const sel = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+        const mdl = config.model || sel?.model;
+        if (llmNow !== undefined && typeof sel?.provider === 'string' && typeof mdl === 'string') break;
+        if (Date.now() > deadline) {
+          warn('补总结：等了 2 分钟还没等到 llm 或模型信息，这次不补了');
+          markBackfill(pending().length, 0, 'timeout');
+          try { await persist(); } catch { /* 写不进去就算了 */ }
+          return;
+        }
+        waited += 1;
+        if (waited % 15 === 0) log(`补总结：还在等 llm（已等 ${(waited * 2)}s）`);
+        await sleep(2000);
+      }
 
       const total = pending().length;
       if (total === 0) {
@@ -606,6 +626,20 @@ export function apply(ctx, rawConfig) {
       // 顺手刷新人读版。这样即使这次什么都没记，衰减后的状态也是对的；
       // 也从别人那儿导入档案之后，立刻就有可读的一份。
       await writeReadableDiary(archive);
+
+      // 启动留痕 —— 落进 manifest，不依赖 debugLog。
+      // 有了它就能一眼分清两种"没补上"：
+      //   有 boot 没 summary_backfill → 插件起来了，但补总结没被调到
+      //   连 boot 都没有           → 装的根本不是这份代码
+      archive.manifest = {
+        ...archive.manifest,
+        boot: { at: Date.now(), schema: SCHEMA_VERSION, entries: archive.diary.length },
+      };
+      try {
+        await persist();
+      } catch (err) {
+        warn(`启动留痕写盘失败：${err instanceof Error ? err.message : String(err)}`);
+      }
 
       // 后台补 summary —— 不 await，绝不能卡启动
       void backfillSummaries().catch((err) =>
