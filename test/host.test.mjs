@@ -53,6 +53,7 @@ function makeHarness(reply = GOOD_REPLY) {
   const agents = [];
   let lastRequest = null;
   let streamCalls = 0;
+  let summaryCalls = 0;
   let llmReply = reply;
   // 「记不记」那一次极短判断 —— 跟固化分开数
   let judgeCalls = 0;
@@ -98,6 +99,24 @@ function makeHarness(reply = GOOD_REPLY) {
       // 所以这个假 llm 得把两者分开数。**streamCalls 只数固化** ——
       // 原来那批断言（"该调用模型" / "不该调用模型"）说的都是固化。
       const isJudge = typeof opts?.system === 'string' && opts.system.includes('你是这条鱼的记性');
+
+      //   3. 写 summary（SUMMARY_SYSTEM）—— 补总结那次调用
+      //
+      // 它也是模型请求，但它不是固化。混在一起会让「只调了一次」这类断言失真。
+      const isSummary = typeof opts?.system === 'string' && opts.system.includes('你在给日记写索引');
+      if (isSummary) {
+        summaryCalls += 1;
+        const body = opts?.messages?.[0]?.content?.[0]?.text ?? '';
+        // 请求里每条是「id\n正文」，把 id 捞出来照原样回一句总结
+        const ids = [...String(body).matchAll(/^(d_[0-9A-Za-z_]+)$/gm)].map((m) => m[1]);
+        const payload = JSON.stringify({
+          items: ids.map((id) => ({ id, summary: `索引-${id}` })),
+        });
+        return (async function* gen() {
+          yield { type: 'text-delta', index: 0, text: payload };
+          yield { type: 'finish', reason: 'stop' };
+        })();
+      }
       if (isJudge) {
         judgeCalls += 1;
         lastJudgeRequest = opts;
@@ -236,6 +255,7 @@ function makeHarness(reply = GOOD_REPLY) {
     },
     getLastRequest: () => lastRequest,
     getStreamCalls: () => streamCalls,
+    getSummaryCalls: () => summaryCalls,
     // 「记不记」那次判断的计数和请求 —— 跟固化分开
     getJudgeCalls: () => judgeCalls,
     getLastJudgeRequest: () => lastJudgeRequest,

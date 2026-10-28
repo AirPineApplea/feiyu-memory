@@ -446,82 +446,131 @@ export function apply(ctx, rawConfig) {
    * 那比 summary 差一截：正文前 30 字是"起手式"，不是"他管它叫什么"。
    *
    * —— 为什么后台跑、分批 ——
-   * 299 条是 30 次模型调用。同步跑会把启动卡成几十秒，那比没有 summary 还糟。
+   * 两百多条是二十几次模型调用。同步跑会把启动卡成几十秒，那比没有 summary 还糟。
    * 所以：每批 10 条、批间隔 1.5 秒，跑完就停；下次启动接着补没补的。
    *
-   * —— 为什么失败会让出 ——
-   * 一批解析不出来就重试一次，连续 3 批都空就停手 —— 别对着一个坏 provider
-   * 把那 60 批跑满。
+   * —— 为什么要等 llm ——
+   * 2026-10-28 踩过的坑：插件 apply 的时候 llm 服务还没挂上，
+   * `ctx.get('llm')` 是 undefined，于是这里一声不吭地 return 了 ——
+   * 重启了三次，一条 summary 都没补上，而日志里干净得像没事发生。
+   * **所以：不再赌"启动那一刻服务就绪"，改成等它（最多 2 分钟）。**
+   *
+   * —— 为什么进度写进 manifest ——
+   * `log()` 只在 debugLog 开着时才落盘，默认是关的。
+   * 而"补了多少"这种事不能靠日志证明 —— 写进 manifest，任何时候都能查。
    */
+  let backfillRunning = false;
   async function backfillSummaries() {
-    const llmP = ctx.get('llm');
-    if (llmP === undefined) return;
+    if (backfillRunning) return;
+    backfillRunning = true;
+    try {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const pending = () =>
-      archive.diary.filter(
-        (e) => typeof e.text === 'string' && e.text !== '' &&
-          (typeof e.summary !== 'string' || e.summary === ''),
-      );
-
-    const total = pending().length;
-    if (total === 0) return;
-    log(`补总结：${total} 条还没有，后台分批补`);
-
-    let done = 0;
-    let fails = 0;
-    for (let round = 0; round < 80; round++) {
-      const todo = pending().slice(0, 10);
-      if (todo.length === 0) break;
-
-      const selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
-      const provider = selection?.provider;
-      const model = config.model || selection?.model;
-      if (typeof provider !== 'string' || typeof model !== 'string') {
-        log('补总结：拿不到模型信息，停手');
-        return;
-      }
-
-      const built = buildSummaryInput(todo);
-      let text = '';
-      try {
-        for await (const chunk of llmP.stream({
-          provider,
-          model,
-          system: built.system,
-          messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
-          maxTokens: 600,
-          temperature: 0,
-          reasoningEffort: '',
-        })) {
-          if (chunk?.type === 'text-delta') text += chunk.text;
-        }
-      } catch (err) {
-        warn(`补总结失败：${err instanceof Error ? err.message : String(err)}`);
-        return;
-      }
-
-      const map = parseSummaryResult(text);
-      if (map.size === 0) {
-        fails += 1;
-        warn(`补总结：这批一条都没解析出来（连续 ${fails} 次）`);
-        if (fails >= 3) {
-          warn('补总结：连着 3 批空，停手，下次启动再试');
+      // 等 llm 和模型信息就绪 —— 启动瞬间它们常常还没挂上
+      const deadline = Date.now() + 120000;
+      for (;;) {
+        const llmNow = ctx.get('llm');
+        const sel = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+        const mdl = config.model || sel?.model;
+        if (llmNow !== undefined && typeof sel?.provider === 'string' && typeof mdl === 'string') break;
+        if (Date.now() > deadline) {
+          warn('补总结：等了 2 分钟还没等到 llm 或模型信息，这次不补了');
           return;
         }
         await sleep(2000);
-        continue;
       }
-      fails = 0;
 
-      archive = applySummaries(archive, map, Date.now());
-      index = buildIndex(archive.diary);
-      await persist();
-      done += map.size;
-      log(`补总结：+${map.size} 条（累计 ${done}/${total}，还剩 ${pending().length}）`);
-      await sleep(1500);
+      const pending = () =>
+        archive.diary.filter(
+          (e) =>
+            typeof e.text === 'string' &&
+            e.text !== '' &&
+            (typeof e.summary !== 'string' || e.summary === ''),
+        );
+
+      const total = pending().length;
+      if (total === 0) {
+        markBackfill(total, 0, 'done');
+        return;
+      }
+      log(`补总结：${total} 条还没有，后台分批补`);
+
+      let done = 0;
+      let fails = 0;
+      for (let round = 0; round < 80; round++) {
+        const todo = pending().slice(0, 10);
+        if (todo.length === 0) break;
+
+        const llmP = ctx.get('llm');
+        const selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? undefined;
+        const provider = selection?.provider;
+        const model = config.model || selection?.model;
+        if (llmP === undefined || typeof provider !== 'string' || typeof model !== 'string') {
+          warn('补总结：模型信息中途没了，停手');
+          markBackfill(total, done, 'stopped');
+          return;
+        }
+
+        const built = buildSummaryInput(todo);
+        let text = '';
+        try {
+          for await (const chunk of llmP.stream({
+            provider,
+            model,
+            system: built.system,
+            messages: [{ role: 'user', content: [{ type: 'text', text: built.user }] }],
+            maxTokens: 600,
+            temperature: 0,
+            reasoningEffort: '',
+          })) {
+            if (chunk?.type === 'text-delta') text += chunk.text;
+          }
+        } catch (err) {
+          warn(`补总结失败：${err instanceof Error ? err.message : String(err)}`);
+          markBackfill(total, done, 'error');
+          return;
+        }
+
+        const map = parseSummaryResult(text);
+        if (map.size === 0) {
+          fails += 1;
+          warn(`补总结：这批一条都没解析出来（连续 ${fails} 次）`);
+          if (fails >= 3) {
+            warn('补总结：连着 3 批空，停手，下次启动再试');
+            markBackfill(total, done, 'error');
+            return;
+          }
+          await sleep(2000);
+          continue;
+        }
+        fails = 0;
+
+        archive = applySummaries(archive, map, Date.now());
+        index = buildIndex(archive.diary);
+        done += map.size;
+        markBackfill(total, done, 'running');
+        await persist();
+        log(`补总结：+${map.size} 条（累计 ${done}/${total}，还剩 ${pending().length}）`);
+        await sleep(1500);
+      }
+      markBackfill(total, done, 'done');
+      log(`补总结：这一轮结束，补了 ${done} 条，还剩 ${pending().length} 条没补`);
+    } finally {
+      backfillRunning = false;
     }
-    log(`补总结：这一轮结束，补了 ${done} 条，还剩 ${pending().length} 条没补`);
+  }
+
+  /**
+   * 把补总结的进度写进 manifest。
+   *
+   * 为什么要落盘：`log()` 默认不写（debugLog 关着），
+   * 而"补了多少"是能证明这套东西到底跑没跑的唯一证据。
+   */
+  function markBackfill(total, done, state) {
+    archive.manifest = {
+      ...archive.manifest,
+      summary_backfill: { total, done, state, at: Date.now() },
+    };
   }
 
   const loadPromise = (async () => {
@@ -1464,6 +1513,10 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
     index = buildIndex(archive.diary);
     if (typeof s.renderCache === 'object') s.renderCache = { turn: -1, text: '' };
     await persist();
+
+    // 刚写进去的条目也还没有 summary —— 顺手补一口。
+    // 不 await：补总结不该让这一轮变慢。有 running 闸，重复调不会打起来。
+    void backfillSummaries();
   }
 
   /* ── 导出 / 导入（v0.1 先只做导出，路径可预期） ── */
