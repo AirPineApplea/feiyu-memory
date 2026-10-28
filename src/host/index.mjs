@@ -2076,7 +2076,17 @@ const appendWindow = Number.isFinite(config.appendWindowTurns) ? config.appendWi
         provider,
         model,
         system,
-        messages: [{ role: 'user', content: [{ type: 'text', text: `她问：${query}\n\n索引：\n${lines.join('\n')}` }] }],
+        // ⚠️ **顺序是钱。** 稳定的大头（索引）必须在前面，会变的那一小句放最后。
+        //
+        // 缓存按**前缀**匹配：第一段一变，后面九千多 token 全部重算。
+        // 原来写的是「她问：X \n\n 索引：…」—— query 在最前面，
+        // 于是每一轮都从第一个 token 开始不命中，等于一直在按全价买这九千多 token。
+        //
+        // 换成索引在前、问题在后：命中价 0.1 元/M vs 全价 1 元/M，差十倍。
+        // 只有"新增了日记"那天索引才变，一天也就几次。
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: `索引：\n${lines.join('\n')}\n\n她问：${query}` }] },
+        ],
         maxTokens: 200,
         temperature: 0,
         // 同上：空字符串是非法档位，stream 会不返回
