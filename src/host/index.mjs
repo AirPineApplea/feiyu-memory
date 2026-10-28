@@ -474,6 +474,12 @@ export function apply(ctx, rawConfig) {
             (typeof e.summary !== 'string' || e.summary === ''),
         );
 
+      // 没活儿就一句话都不留。
+      //
+      // 原来这里是先写 starting 再判断"有没有要补的" —— 结果 241 条全补完之后，
+      // 下一次调用又把状态盖回 starting，界面上看着像永远卡住。
+      if (pending().length === 0) return;
+
       // ── 先留痕，再干活 ──
       //
       // 上一版把「证据」写成了"成功之后才记"，结果:241 条一条没补，
@@ -590,6 +596,7 @@ export function apply(ctx, rawConfig) {
         await sleep(1500);
       }
       markBackfill(total, done, 'done');
+      try { await persist(); } catch { /* 写不进去就算了 */ }
       log(`补总结：这一轮结束，补了 ${done} 条，还剩 ${pending().length} 条没补`);
     } finally {
       backfillRunning = false;
