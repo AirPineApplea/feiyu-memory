@@ -1,7 +1,7 @@
 {
   "name": "feiyu-memory",
-  "version": "4.0.1",
-  "description": "给 DeepSeek Harness 一条会记事的蓝色大肥鱼：跨会话的持久记忆 —— 人格内核、我自己想的、情景日记。",
+  "version": "4.0.2",
+  "description": "给 DeepSeek Harness 一条会记事的蓝色大肥鱼：跨会话的持久人格与日记。每轮结束后固化模型只回答一句「你想记什么」，写下的每条日记配一句十几二十字的索引；下一场对话注入人格、手记和最近的几条，想知道更早的事它自己调 feiyu_recall，插件读索引挑出相关的那几条，正文才进上下文——索引永远不进它的视野，所以它看到的是日子，不是检索结果。遗忘是降权而不是删除。全程本地、发送前先拦掉密钥，档案是一个可读可改、能换账号带走的普通文件夹。零运行时依赖，无构建步骤。",
   "type": "module",
   "license": "MIT",
   "author": "空气凤梨 <feiyu-memory@users.noreply.github.com>",

@@ -236,10 +236,20 @@ if (budget !== null) {
 const marketYml = read('上架投稿.yml');
 if (marketYml === null) warn('发布', '没找到 上架投稿.yml（市场投稿文件）');
 else {
-  // 第三区是 v0.2 的主角，市场描述里必须提到它
-  if (!/我自己想的|我自己|x我自己/.test(marketYml) && !/on-my-mind|judgement|judgment/i.test(marketYml)) {
-    fail('发布', '市场投稿的描述里**没提「我自己想的」第三区** —— 那是这一版的主角，描述过期了');
-  } else ok('发布', '市场描述里提到第三区 ✓');
+  // 2026-10-29：这一条原来钉的是「我自己想的」第三区 ——
+  // 那一区 4.0 已经整栏下线了，于是检查项本身变成过期的，天天报红。
+  //
+  // 检查项过期比没有检查更糟 —— 它会训练人忽略红灯。
+  // 现在钉的是**这一版真实存在的东西**：手记、日记、检索。
+  const wants = [
+    [/手记|hand-note|hand note/i, '手记'],
+    [/日记|diary/i, '日记'],
+    [/索引|summary|feiyu_recall|recall/i, '检索'],
+  ];
+  const missing = wants.filter(([re]) => !re.test(marketYml)).map(([, name]) => name);
+  if (missing.length > 0) {
+    fail('发布', `市场投稿的描述里没提这几个当前功能：${missing.join('、')} —— 描述过期了`);
+  } else ok('发布', '市场描述跟当前功能对得上 ✓');
   if (budget !== null && !marketYml.includes(String(budget))) {
     warn('发布', `市场描述里没出现默认预算 ${budget} —— 确认一下是不是漏了`);
   }
